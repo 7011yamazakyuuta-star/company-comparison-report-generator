@@ -1,0 +1,37 @@
+industry_modes:
+  strict_jpx_industry:
+    label: JPX業種一致
+    assignment_default: true
+    assignment_warning: false
+    description: JPXの業種分類が全社で一致しているかを確認する。
+  business_theme:
+    label: 事業テーマ比較
+    assignment_default: false
+    assignment_warning: true
+    description: カフェ、航空、外食など実際の事業テーマで比較する。課題モードではJPX業種条件と別扱いのため警告する。
+  broad_sector:
+    label: 広義セクター比較
+    assignment_default: false
+    assignment_warning: true
+    description: 食関連、店舗ビジネス、運輸など広めの分類で比較する。課題モードではJPX業種条件と別扱いのため警告する。
+
+assignment_exclusions:
+  jpx_industries:
+    - 銀行業
+    - 証券、商品先物取引業
+    - 保険業
+    - その他金融業
+    - 医薬品
+  broad_sectors:
+    - 金融
+    - 医療・ヘルスケア
+  business_themes:
+    - 医薬品
+    - 医療
+    - ヘルスケア
+
+warning_messages:
+  non_strict_assignment: 課題モードではJPX業種一致が標準条件です。この比較は参考扱いとして警告します。
+  jpx_mismatch: JPX業種が一致していません。
+  excluded_assignment: 課題モードの除外業種に該当します。
+

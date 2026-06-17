@@ -1,0 +1,39 @@
+assignment:
+  listing_on_or_after: "2000-04-01"
+  min_years_since_listing: 3
+  min_companies: 2
+  same_industry_required: true
+  default_industry_mode: strict_jpx_industry
+  missing_value_label: "推定不可"
+  report_sections:
+    - 表紙
+    - 課題対応表
+    - 条件適合表
+    - 企業選定理由
+    - 事業内容
+    - 講義フレームワーク
+    - 主要財務数値表
+    - 財務指標表
+    - グラフ
+    - 収益性分析
+    - 財務安定性分析
+    - キャッシュフロー分析
+    - ＋α分析
+    - 総合比較
+    - 結論
+    - 参考資料
+    - 欠損データ注記
+  banned_investment_advice_terms:
+    - 買い
+    - 売り
+    - 投資すべき
+  alpha_analysis_items:
+    - 損益分岐点
+    - 安全余裕率
+    - 営業レバレッジ
+    - 4P/4C
+    - 顧客関係
+    - バリューチェーン
+    - FCF
+    - PER/PBR
+

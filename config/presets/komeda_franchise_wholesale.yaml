@@ -1,0 +1,13 @@
+preset_id: komeda_franchise_wholesale
+name: コメダHD・神戸物産 strict 比較
+description: フランチャイズ/卸売に近い収益構造を持つ2社をJPX卸売業で比較する。
+companies:
+  - "3543"
+  - "3038"
+industry_mode: strict_jpx_industry
+default_app_mode: assignment
+comparison_theme: 卸売・フランチャイズ型事業
+expected_warnings: []
+notes:
+  - JPX業種一致を優先しつつ、事業モデルの違いを分析できる比較候補。
+

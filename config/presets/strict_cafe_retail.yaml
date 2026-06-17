@@ -1,0 +1,13 @@
+preset_id: strict_cafe_retail
+name: カフェ小売業 strict 比較
+description: ドトール・日レスHDとサンマルクHDをJPX小売業で比較する。
+companies:
+  - "3087"
+  - "3395"
+industry_mode: strict_jpx_industry
+default_app_mode: assignment
+comparison_theme: カフェ・外食小売
+expected_warnings: []
+notes:
+  - JPX業種一致を優先した課題向け比較候補。
+

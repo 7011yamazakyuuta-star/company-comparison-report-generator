@@ -1,0 +1,64 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local databases and caches
+*.sqlite
+*.sqlite3
+*.db
+work/
+
+# Generated application output
+output/reports/
+output/charts/
+output/raw_filings/
+output/logs/
+
+# Legacy/generated output directory from early MVP smoke tests
+outputs/
+
+# Raw/private data. Keep curated sample CSVs under data/company_master,
+# data/sample_financials, and data/manual_kpis in Git.
+data/raw/
+data/private/
+
+# Generated documents and binary reports
+*.docx
+*.pdf
+*.xlsx
+
+# Course handouts and local reference material should not be committed.
+# Summarize required ideas in docs/course_framework.md instead.
+*講義資料*
+*course_material*
+*course-material*
+*lecture*
+
+# EDINET bulk downloads and extracted filings
+edinet_downloads/
+edinet_filings/
+raw_filings/
+*.xbrl
+*.ixbrl
+*.zip
+
+# If future editable Word templates are intentionally versioned, add an
+# exception such as:
+# !templates/*.docx
+

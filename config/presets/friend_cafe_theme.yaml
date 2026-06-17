@@ -1,0 +1,14 @@
+preset_id: friend_cafe_theme
+name: 友人向けカフェ事業テーマ比較
+description: コメダHDとドトール・日レスHDをカフェ・喫茶テーマで比較する。
+companies:
+  - "3543"
+  - "3087"
+industry_mode: business_theme
+default_app_mode: assignment
+comparison_theme: カフェ・喫茶チェーン
+expected_warnings:
+  - JPX業種不一致警告
+notes:
+  - コメダHDはJPX業種が卸売業、ドトール・日レスHDは小売業のため、課題モードではJPX業種不一致警告を表示する。
+

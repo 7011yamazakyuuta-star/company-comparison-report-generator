@@ -1,0 +1,14 @@
+preset_id: airline_assignment
+name: 航空3社 課題向け比較
+description: 日本航空、スターフライヤー、スカイマークをJPX空運業で比較する。
+companies:
+  - "9201"
+  - "9206"
+  - "9204"
+industry_mode: strict_jpx_industry
+default_app_mode: assignment
+comparison_theme: 航空
+expected_warnings: []
+notes:
+  - 日本航空は2012年の再上場を基準に扱う注記を表示する。
+

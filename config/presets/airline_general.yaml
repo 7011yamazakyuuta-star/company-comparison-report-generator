@@ -1,0 +1,16 @@
+preset_id: airline_general
+name: 航空4社 汎用比較
+description: 日本航空、ANA HD、スターフライヤー、スカイマークを汎用モードで比較する。
+companies:
+  - "9201"
+  - "9202"
+  - "9206"
+  - "9204"
+industry_mode: strict_jpx_industry
+default_app_mode: general
+comparison_theme: 航空
+expected_warnings:
+  - ANAは課題モードでは上場日条件警告
+notes:
+  - ANA HDは上場日条件の都合で、大学課題モードでは警告対象。汎用モードの比較候補として用意する。
+

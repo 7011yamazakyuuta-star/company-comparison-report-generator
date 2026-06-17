@@ -14,6 +14,7 @@
 - 欠損値や0除算を「推定不可」として扱う
 - 売上高推移、営業利益率推移、ROA/ROE推移、自己資本比率推移、営業CF/FCF推移のPNGグラフを生成する
 - 表とグラフ入りの日本語Wordレポートを生成する
+- EDINET APIキーがある場合、指定日付の書類一覧を取得してSQLiteに保存する
 
 ## セットアップ
 
@@ -38,6 +39,20 @@ ENV=local
 ```
 
 `EDINET_API_KEY` が未設定でも、サンプルCSVとpytestは動作します。
+
+## EDINET書類一覧の取得
+
+APIキーを `.env` に保存したあと、Streamlitの `EDINET取得` タブから1日分の書類一覧を取得できます。
+
+取得の最初の対象は「書類一覧とメタデータ」です。大量のXBRL/CSV/PDFダウンロードはまだ行いません。
+
+ローカルで疎通確認したい場合は、キーを表示せずに件数だけ確認できます。
+
+```powershell
+python -c "from datetime import date, timedelta; from src.edinet_client import EdinetClient, extract_document_rows; d=date.today()-timedelta(days=1); rows=extract_document_rows(EdinetClient().fetch_documents(d)); print(len(rows))"
+```
+
+取得結果はSQLiteの `edinet_filings` テーブルに保存されます。DBファイルはGitHubに含めません。
 
 ## 起動方法
 
@@ -161,4 +176,3 @@ git push -u origin main
 ## 注意
 
 本ツールは学習目的の企業比較レポート生成MVPです。投資助言、株式売買の推奨、金融商品の勧誘を目的としません。
-

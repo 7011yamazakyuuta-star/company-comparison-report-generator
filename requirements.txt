@@ -4,4 +4,4 @@ matplotlib
 python-docx
 PyYAML
 pytest
-
+requests

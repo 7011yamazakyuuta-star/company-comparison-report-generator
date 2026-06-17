@@ -158,7 +158,11 @@ def _apply_style() -> None:
                 inset 0 1px 0 rgba(255, 255, 255, 0.9),
                 0 8px 22px rgba(0, 0, 0, 0.08);
             backdrop-filter: blur(18px) saturate(1.5);
-            transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
+            transition:
+                transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+                box-shadow 160ms ease,
+                background 160ms ease,
+                border-color 160ms ease;
         }
         .stButton > button:hover,
         .stDownloadButton > button:hover {
@@ -172,7 +176,7 @@ def _apply_style() -> None:
         }
         .stButton > button:active,
         .stDownloadButton > button:active {
-            transform: translateY(0);
+            transform: translateX(2px) translateY(0) scale(0.985);
             box-shadow:
                 inset 0 1px 2px rgba(0, 0, 0, 0.08),
                 0 4px 14px rgba(0, 0, 0, 0.06);
@@ -216,6 +220,11 @@ def _apply_style() -> None:
             font-weight: 650;
             padding: 0.55rem 1rem;
             min-height: 2.2rem;
+            transition:
+                color 180ms ease,
+                background 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+                box-shadow 220ms ease,
+                transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
         }
         button[data-baseweb="tab"][aria-selected="true"] {
             color: var(--app-text);
@@ -224,6 +233,57 @@ def _apply_style() -> None:
             box-shadow:
                 inset 0 1px 0 rgba(255, 255, 255, 0.92),
                 0 4px 14px rgba(0, 0, 0, 0.08);
+            animation: liquid-slide-in 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+        }
+        div[data-testid="stSegmentedControl"],
+        div[data-testid="stButtonGroup"] {
+            margin-bottom: 0.25rem;
+        }
+        div[data-testid="stSegmentedControl"] div[role="group"],
+        div[data-testid="stButtonGroup"] div[role="radiogroup"] {
+            display: flex;
+            gap: 0.22rem;
+            width: 100%;
+            padding: 0.22rem;
+            border: 1px solid rgba(255, 255, 255, 0.82);
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.52);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.88),
+                0 8px 24px rgba(0, 0, 0, 0.07);
+            backdrop-filter: blur(18px) saturate(1.5);
+        }
+        div[data-testid="stSegmentedControl"] button,
+        div[data-testid="stButtonGroup"] button {
+            flex: 1 1 0;
+            min-height: 2.1rem;
+            border-radius: 999px !important;
+            color: var(--app-muted);
+            font-weight: 650;
+            background: transparent;
+            border-color: transparent;
+            box-shadow: none;
+            transition:
+                color 180ms ease,
+                background 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
+                box-shadow 240ms ease,
+                transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+        }
+        div[data-testid="stSegmentedControl"] button[aria-pressed="true"],
+        div[data-testid="stSegmentedControl"] button[aria-selected="true"],
+        div[data-testid="stSegmentedControl"] button[kind="primary"],
+        div[data-testid="stButtonGroup"] button[data-testid="stBaseButton-segmented_controlActive"] {
+            color: var(--app-text);
+            background: rgba(255, 255, 255, 0.88);
+            border-color: rgba(255, 255, 255, 0.92);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.95),
+                0 5px 16px rgba(0, 0, 0, 0.1);
+            animation: liquid-slide-in 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+        }
+        div[data-testid="stSegmentedControl"] button:active,
+        div[data-testid="stButtonGroup"] button:active {
+            transform: translateX(4px) scale(0.985);
         }
         div[data-baseweb="input"] > div,
         div[data-baseweb="select"] > div,
@@ -241,6 +301,77 @@ def _apply_style() -> None:
                 inset 0 1px 0 rgba(255, 255, 255, 0.9),
                 0 8px 18px rgba(0, 0, 0, 0.12);
             backdrop-filter: blur(12px) saturate(1.4);
+            transition:
+                transform 90ms cubic-bezier(0.2, 0.8, 0.2, 1),
+                box-shadow 120ms ease;
+            touch-action: pan-x;
+        }
+        div[data-baseweb="slider"] [role="slider"]:active {
+            transform: scale(1.08);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.95),
+                0 10px 24px rgba(0, 113, 227, 0.22);
+        }
+        div[data-testid="stCheckbox"] label {
+            display: flex !important;
+            align-items: center !important;
+            gap: 0.65rem !important;
+            width: 100% !important;
+            min-height: 2.2rem;
+            cursor: pointer;
+        }
+        div[data-testid="stCheckbox"] label > div:first-child {
+            flex: 0 0 38px !important;
+            width: 38px !important;
+            height: 22px !important;
+            border: 1px solid rgba(255, 255, 255, 0.86);
+            border-radius: 999px !important;
+            background: rgba(255, 255, 255, 0.58);
+            box-shadow:
+                inset 0 1px 1px rgba(255, 255, 255, 0.9),
+                0 6px 16px rgba(0, 0, 0, 0.08);
+            backdrop-filter: blur(14px) saturate(1.4);
+            transition:
+                background 220ms ease,
+                box-shadow 220ms ease,
+                border-color 220ms ease;
+        }
+        div[data-testid="stCheckbox"] label > div:first-child > div {
+            width: 18px !important;
+            height: 18px !important;
+            border-radius: 999px !important;
+            background: rgba(255, 255, 255, 0.94);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.95),
+                0 4px 10px rgba(0, 0, 0, 0.16);
+            transition:
+                transform 240ms cubic-bezier(0.2, 0.9, 0.2, 1),
+                box-shadow 180ms ease;
+        }
+        div[data-testid="stCheckbox"] label:has(input[aria-checked="true"]) > div:first-child {
+            background: linear-gradient(180deg, rgba(0, 126, 245, 0.9), rgba(0, 102, 214, 0.9));
+            border-color: rgba(255, 255, 255, 0.5);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.38),
+                0 8px 18px rgba(0, 113, 227, 0.25);
+        }
+        div[data-testid="stCheckbox"] label:has(input[aria-checked="true"]) > div:first-child > div {
+            transform: translateX(16px);
+        }
+        div[data-testid="stCheckbox"] label:active > div:first-child > div {
+            transform: scaleX(1.16);
+        }
+        div[data-testid="stCheckbox"] label:has(input[aria-checked="true"]):active > div:first-child > div {
+            transform: translateX(16px) scaleX(1.16);
+        }
+        div[data-testid="stCheckbox"] div[data-testid="stWidgetLabel"] {
+            flex: 1 1 auto !important;
+            width: auto !important;
+        }
+        div[data-testid="stCheckbox"] div[data-testid="stWidgetLabel"] p {
+            margin: 0;
+            writing-mode: horizontal-tb;
+            white-space: normal;
         }
         .stCheckbox label,
         .stRadio label {
@@ -266,6 +397,30 @@ def _apply_style() -> None:
         .status-warn {
             color: var(--app-red);
             font-weight: 650;
+        }
+        @keyframes liquid-slide-in {
+            0% {
+                transform: translateX(-8px) scale(0.97);
+                opacity: 0.72;
+            }
+            58% {
+                transform: translateX(2px) scale(1.015);
+                opacity: 1;
+            }
+            100% {
+                transform: translateX(0) scale(1);
+                opacity: 1;
+            }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            *,
+            *::before,
+            *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+                scroll-behavior: auto !important;
+            }
         }
         @media (max-width: 640px) {
             .block-container {
@@ -451,8 +606,8 @@ def _render_edinet_panel() -> None:
         )
         filter_col_a, filter_col_b, filter_col_c = st.columns([2, 1, 1])
         query = filter_col_a.text_input("検索", placeholder="会社名、EDINETコード、docID")
-        annual_only = filter_col_b.checkbox("有価証券報告書のみ", value=True)
-        csv_only = filter_col_c.checkbox("CSVありのみ", value=True)
+        annual_only = filter_col_b.toggle("有価証券報告書のみ", value=True, width="stretch")
+        csv_only = filter_col_c.toggle("CSVありのみ", value=True, width="stretch")
         filtered_filings = filter_filings(filings, query=query, annual_only=annual_only, csv_only=csv_only)
         st.dataframe(filtered_filings, use_container_width=True, hide_index=True)
 
@@ -484,7 +639,7 @@ def _render_edinet_panel() -> None:
 
 
 def main() -> None:
-    st.set_page_config(page_title="企業比較レポート", layout="wide")
+    st.set_page_config(page_title="企業比較レポート", layout="wide", initial_sidebar_state="expanded")
     _apply_style()
 
     rubric = load_rubric()
@@ -500,12 +655,16 @@ def main() -> None:
         selected_item = st.selectbox("比較セット", _ordered_presets(presets), format_func=_preset_label)
         preset_id, preset = selected_item
         default_mode = str(preset.get("default_app_mode", "assignment"))
-        app_mode = st.radio(
+        app_mode = st.segmented_control(
             "利用目的",
-            ["assignment", "general"],
-            index=0 if default_mode == "assignment" else 1,
+            options=["assignment", "general"],
+            default=default_mode,
+            required=True,
             format_func=lambda value: APP_MODE_LABELS[value],
+            width="stretch",
         )
+        if app_mode is None:
+            app_mode = default_mode
         industry_modes = list(industry_policy["industry_modes"].keys())
         default_industry = str(preset.get("industry_mode", rubric["assignment"]["default_industry_mode"]))
         industry_mode = st.selectbox(
@@ -514,7 +673,7 @@ def main() -> None:
             index=industry_modes.index(default_industry),
             format_func=lambda mode: _industry_mode_label(mode, industry_policy),
         )
-        manual_override = st.checkbox("企業を手動で選ぶ")
+        manual_override = st.toggle("企業を手動で選ぶ", width="stretch")
         if manual_override:
             options = dataset.company_master["ticker"].tolist()
             name_lookup = dict(zip(dataset.company_master["ticker"], dataset.company_master["company_name"], strict=False))

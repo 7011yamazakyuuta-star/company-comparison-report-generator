@@ -20,6 +20,13 @@ APP_MODE_LABELS = {
     "general": "汎用モード",
 }
 
+WORKFLOW_MODE_LABELS = {
+    "auto": "オートマ作成",
+    "detail": "詳細設定",
+}
+
+WIZARD_STEP_LABELS = ["目的", "テーマ", "業種", "作成"]
+
 
 def _apply_style() -> None:
     st.markdown(
@@ -47,9 +54,18 @@ def _apply_style() -> None:
             color: var(--app-text);
         }
         header[data-testid="stHeader"] {
-            background: rgba(245, 245, 247, 0.86);
-            border-bottom: 1px solid rgba(210, 210, 215, 0.74);
+            min-height: 0;
+            height: 0;
+            background: transparent;
+            border-bottom: 0;
             backdrop-filter: blur(18px);
+        }
+        div[data-testid="stToolbar"],
+        div[data-testid="stDecoration"],
+        div[data-testid="stStatusWidget"] {
+            display: none !important;
+            visibility: hidden !important;
+            height: 0 !important;
         }
         .block-container {
             padding-top: 1.35rem;
@@ -75,18 +91,26 @@ def _apply_style() -> None:
         div[data-testid="stSidebar"] {
             background: var(--app-surface-soft);
             border-right: 1px solid var(--app-border);
+            border-bottom: 0 !important;
+            box-shadow: none !important;
         }
         div[data-testid="stSidebarContent"] {
             padding-top: 1.35rem;
+            border-bottom: 0 !important;
+            box-shadow: none !important;
+        }
+        div[data-testid="stSidebarUserContent"] {
+            border-bottom: 0 !important;
+            box-shadow: none !important;
         }
         div[data-testid="stSidebar"] h2,
         div[data-testid="stSidebar"] h3 {
             font-size: 1rem;
         }
         .app-header {
-            padding: 0.8rem 0 1.35rem;
-            border-bottom: 1px solid var(--app-border);
-            margin-bottom: 1.1rem;
+            padding: 1rem 0 1.7rem;
+            border-bottom: 0;
+            margin-bottom: 0.65rem;
         }
         .app-kicker {
             color: var(--app-muted);
@@ -96,7 +120,7 @@ def _apply_style() -> None:
         }
         .app-title {
             color: var(--app-text);
-            font-size: 2.35rem;
+            font-size: 3rem;
             line-height: 1.1;
             font-weight: 720;
             margin: 0;
@@ -107,6 +131,129 @@ def _apply_style() -> None:
             line-height: 1.65;
             max-width: 760px;
             margin: 0.75rem 0 0;
+        }
+        .store-strip {
+            display: flex;
+            gap: 0.75rem;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-top: 1.2rem;
+        }
+        .store-chip {
+            border: 1px solid rgba(255, 255, 255, 0.84);
+            border-radius: 999px;
+            padding: 0.48rem 0.75rem;
+            background: rgba(255, 255, 255, 0.62);
+            color: var(--app-muted);
+            font-size: 0.86rem;
+            font-weight: 650;
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.9),
+                0 8px 22px rgba(0, 0, 0, 0.06);
+            backdrop-filter: blur(18px) saturate(1.45);
+        }
+        .auto-shell {
+            margin-top: 1.1rem;
+            padding: 1.35rem;
+            border: 1px solid rgba(255, 255, 255, 0.86);
+            border-radius: 22px;
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.62)),
+                radial-gradient(circle at 85% 0%, rgba(255, 255, 255, 0.94), transparent 34%);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.95),
+                0 18px 52px rgba(0, 0, 0, 0.08);
+            backdrop-filter: blur(24px) saturate(1.5);
+        }
+        .auto-kicker {
+            color: var(--app-muted);
+            font-size: 0.78rem;
+            font-weight: 700;
+            margin-bottom: 0.35rem;
+        }
+        .auto-title {
+            font-size: 1.7rem;
+            line-height: 1.25;
+            font-weight: 720;
+            color: var(--app-text);
+            margin: 0;
+        }
+        .auto-lede {
+            color: var(--app-muted);
+            font-size: 0.96rem;
+            line-height: 1.65;
+            margin: 0.55rem 0 0;
+            max-width: 720px;
+        }
+        .wizard-progress {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 0.45rem;
+            margin: 1.15rem 0 1.2rem;
+        }
+        .wizard-dot {
+            height: 0.42rem;
+            border-radius: 999px;
+            background: rgba(210, 210, 215, 0.72);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+            overflow: hidden;
+        }
+        .wizard-dot.is-active,
+        .wizard-dot.is-done {
+            background: linear-gradient(90deg, rgba(29, 29, 31, 0.82), rgba(110, 110, 115, 0.62));
+        }
+        .wizard-dot.is-active {
+            animation: liquid-slide-in 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+        }
+        .choice-copy {
+            min-height: 6.35rem;
+            padding: 1rem 1rem 0.75rem;
+            border: 1px solid rgba(255, 255, 255, 0.82);
+            border-radius: 18px;
+            background: rgba(255, 255, 255, 0.52);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.88),
+                0 10px 28px rgba(0, 0, 0, 0.06);
+            backdrop-filter: blur(18px) saturate(1.45);
+        }
+        .choice-title {
+            color: var(--app-text);
+            font-size: 1.04rem;
+            font-weight: 700;
+            margin-bottom: 0.3rem;
+        }
+        .choice-body {
+            color: var(--app-muted);
+            font-size: 0.88rem;
+            line-height: 1.55;
+        }
+        .review-line {
+            display: flex;
+            gap: 0.8rem;
+            align-items: flex-start;
+            padding: 0.7rem 0;
+            border-bottom: 1px solid rgba(210, 210, 215, 0.58);
+        }
+        .review-label {
+            color: var(--app-muted);
+            flex: 0 0 8.5rem;
+            font-size: 0.86rem;
+            font-weight: 650;
+        }
+        .review-value {
+            color: var(--app-text);
+            font-size: 0.94rem;
+            line-height: 1.55;
+        }
+        .workflow-switch {
+            margin: 0.4rem 0 0.85rem;
+            max-width: 28rem;
+        }
+        .soft-divider {
+            height: 1px;
+            width: 100%;
+            margin: 1.2rem 0;
+            background: rgba(210, 210, 215, 0.7);
         }
         .section-eyebrow {
             color: var(--app-muted);
@@ -163,6 +310,31 @@ def _apply_style() -> None:
                 box-shadow 160ms ease,
                 background 160ms ease,
                 border-color 160ms ease;
+        }
+        button:focus,
+        button:focus-visible,
+        input:focus,
+        textarea:focus,
+        [tabindex]:focus,
+        [role="button"]:focus {
+            outline: none !important;
+        }
+        div[data-testid="stSidebar"] button:focus,
+        div[data-testid="stSidebar"] button:focus-visible,
+        div[data-testid="stSidebar"] input:focus,
+        div[data-testid="stSidebar"] [data-baseweb="select"] > div:focus-within,
+        div[data-testid="stSidebar"] [data-baseweb="input"] > div:focus-within {
+            outline: none !important;
+            border-color: rgba(255, 255, 255, 0.92) !important;
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.95),
+                0 0 0 3px rgba(210, 210, 215, 0.32) !important;
+        }
+        div[data-testid="stSidebar"] [style*="background-color: rgb(0, 104, 201)"],
+        div[data-testid="stSidebar"] [style*="background: rgb(0, 104, 201)"],
+        div[data-testid="stSidebar"] [style*="border-color: rgb(0, 104, 201)"] {
+            background-color: rgba(210, 210, 215, 0.72) !important;
+            border-color: rgba(210, 210, 215, 0.72) !important;
         }
         .stButton > button:hover,
         .stDownloadButton > button:hover {
@@ -428,7 +600,20 @@ def _apply_style() -> None:
                 padding-right: 1rem;
             }
             .app-title {
-                font-size: 1.9rem;
+                font-size: 2.1rem;
+            }
+            .auto-shell {
+                border-radius: 18px;
+                padding: 1rem;
+            }
+            .wizard-progress {
+                gap: 0.3rem;
+            }
+            .review-line {
+                display: block;
+            }
+            .review-label {
+                margin-bottom: 0.2rem;
             }
             div[data-baseweb="tab-list"] {
                 width: 100%;
@@ -452,11 +637,16 @@ def _render_app_header() -> None:
         """
         <div class="app-header">
             <div class="app-kicker">Company Comparison Report Generator</div>
-            <h1 class="app-title">上場企業比較レポート</h1>
+            <h1 class="app-title">比較レポートを作る。</h1>
             <p class="app-lede">
-                企業選定、課題条件チェック、財務指標の比較、Wordレポート生成までを
-                一つの作業画面で進めます。サンプルCSVとEDINET取得を同じ流れで扱えます。
+                上場企業の選定、課題条件チェック、財務指標の比較、Wordレポート生成まで。
+                質問に答えるだけで、提出用のたたき台まで進めます。
             </p>
+            <div class="store-strip">
+                <div class="store-chip">サンプルCSV対応</div>
+                <div class="store-chip">EDINET取得対応</div>
+                <div class="store-chip">Wordレポート生成</div>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -467,6 +657,222 @@ def _render_section_intro(eyebrow: str, title: str, lede: str) -> None:
     st.markdown(f'<div class="section-eyebrow">{eyebrow}</div>', unsafe_allow_html=True)
     st.subheader(title)
     st.markdown(f'<p class="section-lede">{lede}</p>', unsafe_allow_html=True)
+
+
+def _render_progress(current_step: int) -> None:
+    dots = []
+    for index, label in enumerate(WIZARD_STEP_LABELS):
+        state = "is-done" if index < current_step else "is-active" if index == current_step else ""
+        dots.append(f'<div class="wizard-dot {state}" title="{label}"></div>')
+    st.markdown(f'<div class="wizard-progress">{"".join(dots)}</div>', unsafe_allow_html=True)
+
+
+def _set_state_and_rerun(**updates: object) -> None:
+    for key, value in updates.items():
+        st.session_state[key] = value
+    st.rerun()
+
+
+def _render_choice(title: str, body: str) -> None:
+    st.markdown(
+        f"""
+        <div class="choice-copy">
+            <div class="choice-title">{title}</div>
+            <div class="choice-body">{body}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_review_line(label: str, value: str) -> None:
+    st.markdown(
+        f"""
+        <div class="review-line">
+            <div class="review-label">{label}</div>
+            <div class="review-value">{value}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _wizard_preset_choice(
+    preset_id: str,
+    app_mode: str,
+    industry_mode: str,
+    wizard_step: int = 2,
+) -> None:
+    _set_state_and_rerun(
+        selected_preset_id=preset_id,
+        app_mode=app_mode,
+        industry_mode=industry_mode,
+        manual_override=False,
+        wizard_step=wizard_step,
+    )
+
+
+def _render_auto_mode(
+    *,
+    preset_id: str,
+    preset: dict,
+    app_mode: str,
+    industry_mode: str,
+    selected_tickers: list[str],
+    selected_companies: pd.DataFrame,
+    preview: dict,
+    dataset,
+    industry_policy: dict,
+    rubric: dict,
+) -> None:
+    current_step = int(st.session_state.get("wizard_step", 0))
+    current_step = max(0, min(current_step, len(WIZARD_STEP_LABELS) - 1))
+    step_copy = {
+        0: (
+            "Question 1",
+            "何として使いますか？",
+            "課題提出向けか、自由な企業比較かを選びます。",
+        ),
+        1: (
+            "Question 2",
+            "どの比較から始めますか？",
+            "近いものを選ぶだけで、企業セットと基本条件をそろえます。",
+        ),
+        2: (
+            "Question 3",
+            "業種の見方を選びます。",
+            "課題提出ではJPX業種一致が基本です。テーマ比較は便利ですが、警告付きで扱います。",
+        ),
+        3: (
+            "Ready",
+            "この内容で作成できます。",
+            "条件チェックを確認し、必要ならこのままWordレポートを生成します。",
+        ),
+    }
+    step_kicker, step_title, step_lede = step_copy[current_step]
+
+    st.markdown(
+        f"""
+        <div class="auto-shell">
+            <div class="auto-kicker">{step_kicker}</div>
+            <h2 class="auto-title">{step_title}</h2>
+            <p class="auto-lede">
+                {step_lede}
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    _render_progress(current_step)
+
+    if current_step == 0:
+        purpose_choice = st.segmented_control(
+            "用途を選択",
+            options=["assignment", "general"],
+            default=None,
+            format_func=lambda value: "大学課題として作る" if value == "assignment" else "自由に比較する",
+            label_visibility="collapsed",
+            key="wizard_purpose_choice",
+            width="stretch",
+        )
+        if purpose_choice:
+            _set_state_and_rerun(app_mode=purpose_choice, wizard_step=1)
+        _render_choice(
+            "選ぶだけで次へ進みます",
+            "課題モードでは条件チェックを厳しめに、汎用モードでは比較分析の自由度を優先します。",
+        )
+        return
+
+    if current_step == 1:
+        first_row = st.columns(2)
+        with first_row[0]:
+            _render_choice("カフェをテーマで比較", "コメダHDとドトール・日レスHD。事業テーマ比較なので課題では警告も確認できます。")
+            if st.button("カフェテーマで進む", type="primary", width="stretch", key="wizard_friend_cafe"):
+                _wizard_preset_choice("friend_cafe_theme", app_mode, "business_theme")
+        with first_row[1]:
+            _render_choice("課題向けカフェ小売", "ドトール・日レスHDとサンマルクHD。JPX業種一致を重視します。")
+            if st.button("小売比較で進む", width="stretch", key="wizard_strict_cafe"):
+                _wizard_preset_choice("strict_cafe_retail", "assignment", "strict_jpx_industry")
+
+        second_row = st.columns(2)
+        with second_row[0]:
+            _render_choice("航空会社を課題向けに比較", "日本航空、スターフライヤー、スカイマーク。再上場注記も扱います。")
+            if st.button("航空課題で進む", width="stretch", key="wizard_airline_assignment"):
+                _wizard_preset_choice("airline_assignment", "assignment", "strict_jpx_industry")
+        with second_row[1]:
+            _render_choice("航空会社を広く比較", "ANA HDも含めた汎用比較。課題条件より業界理解を優先します。")
+            if st.button("航空汎用で進む", width="stretch", key="wizard_airline_general"):
+                _wizard_preset_choice("airline_general", "general", "strict_jpx_industry")
+
+        if st.button("戻る", width="stretch", key="wizard_back_to_purpose"):
+            _set_state_and_rerun(wizard_step=0, wizard_purpose_choice=None)
+        return
+
+    if current_step == 2:
+        industry_choice = st.segmented_control(
+            "業種判定を選択",
+            options=["strict_jpx_industry", "business_theme", "broad_sector"],
+            default=None,
+            format_func=lambda mode: _industry_mode_label(mode, industry_policy),
+            label_visibility="collapsed",
+            key="wizard_industry_choice",
+            width="stretch",
+        )
+        if industry_choice:
+            _set_state_and_rerun(industry_mode=industry_choice, wizard_step=3)
+        _render_choice(
+            "課題ならJPX業種一致が基本",
+            "テーマ比較や広義セクターは便利ですが、大学課題モードでは警告付きで扱います。",
+        )
+        if app_mode == "assignment" and industry_mode != "strict_jpx_industry":
+            st.warning("課題モードではJPX業種一致が標準です。テーマ比較や広義セクターは警告付きになります。")
+        if st.button("戻る", width="stretch", key="wizard_back_to_theme"):
+            _set_state_and_rerun(wizard_step=1)
+        return
+
+    company_names = " / ".join(selected_companies["company_name"].astype(str).tolist())
+    _render_review_line("比較セット", str(preset.get("name", preset_id)))
+    _render_review_line("企業", company_names)
+    _render_review_line("利用目的", APP_MODE_LABELS.get(app_mode, app_mode))
+    _render_review_line("業種判定", _industry_mode_label(industry_mode, industry_policy))
+    _render_review_line("警告", f"{len(preview['warnings'])}件" if preview["warnings"] else "なし")
+
+    if preview["warnings"]:
+        for warning in preview["warnings"]:
+            st.warning(warning)
+    else:
+        st.success("条件チェック上の警告はありません。")
+
+    actions = st.columns([1.2, 1, 1])
+    with actions[0]:
+        disabled = len(selected_tickers) < int(rubric["assignment"]["min_companies"])
+        if st.button("Wordレポートを作成", type="primary", disabled=disabled, width="stretch", key="wizard_generate_report"):
+            with st.spinner("レポートを作成しています..."):
+                package = build_report_package(
+                    selected_tickers=selected_tickers,
+                    preset={**preset, "preset_id": preset_id},
+                    app_mode=app_mode,
+                    industry_mode=industry_mode,
+                    dataset=dataset,
+                    as_of=date.today(),
+                )
+            st.success(f"生成しました: {package.docx_path.name}")
+            with package.docx_path.open("rb") as f:
+                st.download_button(
+                    "Wordをダウンロード",
+                    data=f.read(),
+                    file_name=package.docx_path.name,
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    width="stretch",
+                    key="wizard_download_report",
+                )
+            st.dataframe(_latest_metric_preview(package.metrics), use_container_width=True, hide_index=True)
+    with actions[1]:
+        if st.button("条件を選び直す", width="stretch", key="wizard_back_to_industry"):
+            _set_state_and_rerun(wizard_step=2, wizard_industry_choice=None)
+    with actions[2]:
+        if st.button("詳細設定を開く", width="stretch", key="wizard_open_detail"):
+            _set_state_and_rerun(workflow_mode_pending="detail")
 
 
 def _render_workspace_summary(
@@ -646,45 +1052,88 @@ def main() -> None:
     industry_policy = load_industry_policy()
     presets = load_presets()
     dataset = load_dataset(use_sqlite=True)
+    ordered_preset_ids = [preset_id for preset_id, _ in _ordered_presets(presets)]
+
+    if "workflow_mode" not in st.session_state:
+        st.session_state.workflow_mode = "auto"
+    if "workflow_mode_pending" in st.session_state:
+        st.session_state.workflow_mode = st.session_state.workflow_mode_pending
+        del st.session_state["workflow_mode_pending"]
+    if "wizard_step" not in st.session_state:
+        st.session_state.wizard_step = 0
+    if "selected_preset_id" not in st.session_state or st.session_state.selected_preset_id not in presets:
+        st.session_state.selected_preset_id = ordered_preset_ids[0]
+    active_preset = presets[st.session_state.selected_preset_id]
+    if "app_mode" not in st.session_state:
+        st.session_state.app_mode = str(active_preset.get("default_app_mode", "assignment"))
+    if "manual_override" not in st.session_state:
+        st.session_state.manual_override = False
+    industry_modes = list(industry_policy["industry_modes"].keys())
+    if "industry_mode" not in st.session_state or st.session_state.industry_mode not in industry_modes:
+        st.session_state.industry_mode = str(active_preset.get("industry_mode", rubric["assignment"]["default_industry_mode"]))
 
     _render_app_header()
 
-    with st.sidebar:
-        st.header("比較設定")
-        st.caption("プリセットから始めて、必要なら企業や業種判定を切り替えます。")
-        selected_item = st.selectbox("比較セット", _ordered_presets(presets), format_func=_preset_label)
-        preset_id, preset = selected_item
-        default_mode = str(preset.get("default_app_mode", "assignment"))
-        app_mode = st.segmented_control(
-            "利用目的",
-            options=["assignment", "general"],
-            default=default_mode,
-            required=True,
-            format_func=lambda value: APP_MODE_LABELS[value],
-            width="stretch",
-        )
-        if app_mode is None:
-            app_mode = default_mode
-        industry_modes = list(industry_policy["industry_modes"].keys())
-        default_industry = str(preset.get("industry_mode", rubric["assignment"]["default_industry_mode"]))
-        industry_mode = st.selectbox(
-            "業種の見方",
-            industry_modes,
-            index=industry_modes.index(default_industry),
-            format_func=lambda mode: _industry_mode_label(mode, industry_policy),
-        )
-        manual_override = st.toggle("企業を手動で選ぶ", width="stretch")
-        if manual_override:
-            options = dataset.company_master["ticker"].tolist()
-            name_lookup = dict(zip(dataset.company_master["ticker"], dataset.company_master["company_name"], strict=False))
-            selected_tickers = st.multiselect(
-                "比較企業",
-                options,
-                default=list(preset["companies"]),
-                format_func=lambda ticker: f"{ticker} {name_lookup.get(ticker, '')}",
+    st.markdown('<div class="workflow-switch">', unsafe_allow_html=True)
+    workflow_mode = st.segmented_control(
+        "作成モード",
+        options=["auto", "detail"],
+        required=True,
+        format_func=lambda value: WORKFLOW_MODE_LABELS[value],
+        key="workflow_mode",
+        label_visibility="collapsed",
+        width="stretch",
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+    if workflow_mode is None:
+        workflow_mode = "auto"
+
+    preset_id = st.session_state.selected_preset_id
+    preset = presets[preset_id]
+    app_mode = str(st.session_state.app_mode)
+    industry_mode = str(st.session_state.industry_mode)
+    manual_override = bool(st.session_state.manual_override)
+    selected_tickers = list(preset["companies"])
+
+    if workflow_mode == "detail":
+        with st.sidebar:
+            st.header("比較設定")
+            st.caption("プリセットから始めて、必要なら企業や業種判定を切り替えます。")
+            preset_id = st.selectbox(
+                "比較セット",
+                ordered_preset_ids,
+                format_func=lambda value: _preset_label((value, presets[value])),
+                key="selected_preset_id",
             )
-        else:
-            selected_tickers = list(preset["companies"])
+            preset = presets[preset_id]
+            app_mode = st.segmented_control(
+                "利用目的",
+                options=["assignment", "general"],
+                required=True,
+                format_func=lambda value: APP_MODE_LABELS[value],
+                width="stretch",
+                key="app_mode",
+            )
+            if app_mode is None:
+                app_mode = str(preset.get("default_app_mode", "assignment"))
+            industry_mode = st.selectbox(
+                "業種の見方",
+                industry_modes,
+                format_func=lambda mode: _industry_mode_label(mode, industry_policy),
+                key="industry_mode",
+            )
+            manual_override = st.toggle("企業を手動で選ぶ", width="stretch", key="manual_override")
+            if manual_override:
+                options = dataset.company_master["ticker"].tolist()
+                name_lookup = dict(zip(dataset.company_master["ticker"], dataset.company_master["company_name"], strict=False))
+                selected_tickers = st.multiselect(
+                    "比較企業",
+                    options,
+                    default=list(preset["companies"]),
+                    format_func=lambda ticker: f"{ticker} {name_lookup.get(ticker, '')}",
+                )
+            else:
+                selected_tickers = list(preset["companies"])
 
     selected_companies = select_companies(dataset.company_master, selected_tickers)
     preview = check_assignment_conditions(
@@ -696,6 +1145,21 @@ def main() -> None:
         as_of=date.today(),
     )
     warning_list = list(preview["warnings"])
+
+    if workflow_mode == "auto":
+        _render_auto_mode(
+            preset_id=preset_id,
+            preset=preset,
+            app_mode=app_mode,
+            industry_mode=industry_mode,
+            selected_tickers=selected_tickers,
+            selected_companies=selected_companies,
+            preview=preview,
+            dataset=dataset,
+            industry_policy=industry_policy,
+            rubric=rubric,
+        )
+        return
 
     _render_workspace_summary(
         preset_id=preset_id,

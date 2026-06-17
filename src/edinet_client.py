@@ -19,6 +19,14 @@ class EdinetApiError(RuntimeError):
     """Raised when EDINET API access cannot be completed."""
 
 
+@dataclass(frozen=True)
+class EdinetDocumentFile:
+    doc_id: str
+    file_type: int
+    content: bytes
+    content_type: str
+
+
 @dataclass
 class EdinetClient:
     api_key: str | None = None
@@ -72,6 +80,32 @@ class EdinetClient:
         if not isinstance(payload, dict):
             raise EdinetApiError("EDINET documents API returned an unexpected response.")
         return payload
+
+    def fetch_document_file(self, doc_id: str, file_type: int = 5) -> EdinetDocumentFile:
+        clean_doc_id = str(doc_id).strip()
+        if not clean_doc_id:
+            raise EdinetApiError("doc_id is required.")
+        params: dict[str, Any] = {"type": file_type}
+        params.update(self._auth_params())
+        endpoint = EDINET_DOCUMENT_ENDPOINT.format(doc_id=clean_doc_id)
+        try:
+            response = self.session.get(endpoint, params=params, timeout=self.timeout_seconds)
+        except requests.RequestException:
+            raise EdinetApiError(
+                "EDINET APIから書類本体を取得できませんでした。ネットワーク、プロキシ、またはEDINET側の状態を確認してください。"
+            ) from None
+        if response.status_code != 200:
+            raise EdinetApiError(f"EDINET document API failed: HTTP {response.status_code}")
+        content = bytes(response.content or b"")
+        if not content:
+            raise EdinetApiError("EDINET document API returned an empty file.")
+        content_type = response.headers.get("Content-Type", "") if hasattr(response, "headers") else ""
+        return EdinetDocumentFile(
+            doc_id=clean_doc_id,
+            file_type=file_type,
+            content=content,
+            content_type=content_type,
+        )
 
     def fetch_documents_stub(self, target_date: date, doc_type: int = 2) -> dict[str, Any]:
         return {

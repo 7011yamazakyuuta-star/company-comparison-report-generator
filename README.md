@@ -45,6 +45,7 @@ ENV=local
 APIキーを `.env` に保存したあと、Streamlitの `EDINET取得` タブから1日分の書類一覧を取得できます。
 
 取得の最初の対象は「書類一覧とメタデータ」です。大量のXBRL/CSV/PDFダウンロードはまだ行いません。
+保存済み一覧では、会社名、EDINETコード、docIDで検索できます。まずは「有価証券報告書のみ」「CSVありのみ」で絞り込み、必要な書類を1件ずつ `output/raw_filings/` に保存します。
 
 ローカルで疎通確認したい場合は、キーを表示せずに件数だけ確認できます。
 
@@ -53,6 +54,7 @@ python -c "from datetime import date, timedelta; from src.edinet_client import E
 ```
 
 取得結果はSQLiteの `edinet_filings` テーブルに保存されます。DBファイルはGitHubに含めません。
+書類本体のCSV ZIPもGitHubには含めません。
 
 ## 起動方法
 

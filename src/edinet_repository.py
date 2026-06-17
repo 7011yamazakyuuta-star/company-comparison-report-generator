@@ -105,3 +105,33 @@ def load_filings(db_path: Path = DEFAULT_DB_PATH, limit: int = 200) -> pd.DataFr
             params=(limit,),
         )
 
+
+def filter_filings(
+    filings: pd.DataFrame,
+    query: str = "",
+    annual_only: bool = False,
+    csv_only: bool = False,
+) -> pd.DataFrame:
+    filtered = filings.copy()
+    if filtered.empty:
+        return filtered
+
+    if annual_only and "doc_description" in filtered.columns:
+        filtered = filtered[
+            filtered["doc_description"].fillna("").astype(str).str.contains("有価証券報告書", regex=False)
+        ]
+    if csv_only and "csv_flag" in filtered.columns:
+        filtered = filtered[filtered["csv_flag"].fillna("").astype(str) == "1"]
+    query = query.strip()
+    if query:
+        searchable_columns = [
+            column
+            for column in ["doc_id", "edinet_code", "sec_code", "filer_name", "doc_description"]
+            if column in filtered.columns
+        ]
+        if searchable_columns:
+            mask = filtered[searchable_columns].fillna("").astype(str).agg(" ".join, axis=1).str.contains(
+                query, case=False, regex=False
+            )
+            filtered = filtered[mask]
+    return filtered.reset_index(drop=True)

@@ -10,7 +10,8 @@ from src.company_master import select_companies
 from src.config_loader import load_industry_policy, load_presets, load_rubric
 from src.data_loader import DEFAULT_DB_PATH, load_dataset
 from src.edinet_client import EdinetApiError, EdinetClient, extract_document_rows
-from src.edinet_repository import load_filings, save_filings
+from src.edinet_files import save_raw_document
+from src.edinet_repository import filter_filings, load_filings, save_filings
 from src.report_writer import build_report_package
 
 
@@ -158,7 +159,40 @@ def _render_edinet_panel() -> None:
     if filings.empty:
         st.info("保存済みのEDINET書類一覧はまだありません。")
     else:
-        st.dataframe(filings, use_container_width=True, hide_index=True)
+        st.divider()
+        st.subheader("保存済み一覧")
+        filter_col_a, filter_col_b, filter_col_c = st.columns([2, 1, 1])
+        query = filter_col_a.text_input("検索", placeholder="会社名、EDINETコード、docID")
+        annual_only = filter_col_b.checkbox("有価証券報告書のみ", value=True)
+        csv_only = filter_col_c.checkbox("CSVありのみ", value=True)
+        filtered_filings = filter_filings(filings, query=query, annual_only=annual_only, csv_only=csv_only)
+        st.dataframe(filtered_filings, use_container_width=True, hide_index=True)
+
+        if filtered_filings.empty:
+            st.info("条件に合う書類はありません。")
+        else:
+            options = filtered_filings["doc_id"].astype(str).tolist()
+            label_lookup = {
+                str(row.doc_id): f"{row.doc_id} | {row.filer_name} | {row.doc_description}"
+                for row in filtered_filings.itertuples(index=False)
+            }
+            selected_doc_id = st.selectbox(
+                "CSVを取得する書類",
+                options=options,
+                format_func=lambda doc_id: label_lookup.get(str(doc_id), str(doc_id)),
+            )
+            if st.button("この書類のCSVを取得", disabled=not client.has_api_key):
+                with st.spinner("書類CSVを取得しています..."):
+                    try:
+                        document_file = client.fetch_document_file(str(selected_doc_id), file_type=5)
+                        saved_path = save_raw_document(document_file)
+                    except EdinetApiError as exc:
+                        st.error(f"取得できませんでした: {exc}")
+                        return
+                    except Exception as exc:  # pragma: no cover - Streamlit safety net
+                        st.error(f"予期しないエラーです: {exc}")
+                        return
+                st.success(f"保存しました: {saved_path}")
 
 
 def main() -> None:
@@ -303,4 +337,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

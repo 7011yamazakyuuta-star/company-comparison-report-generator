@@ -2530,6 +2530,7 @@ def _build_prompt_download(
     app_mode: str,
     industry_mode: str,
     dataset,
+    data_source_audit: pd.DataFrame | None = None,
 ) -> tuple[str, str]:
     edinet_filings = _load_filings_cached(200)
     edinet_filings = _filter_filings_by_tickers(edinet_filings, selected_tickers).head(20)
@@ -2541,6 +2542,7 @@ def _build_prompt_download(
         dataset=dataset,
         as_of=date.today(),
         edinet_filings=edinet_filings,
+        data_source_audit=data_source_audit,
     )
     file_name = f"{preset_id}_llm_report_prompt.md"
     return file_name, prompt
@@ -3492,6 +3494,7 @@ def main() -> None:
                 app_mode=app_mode,
                 industry_mode=industry_mode,
                 dataset=analysis_dataset,
+                data_source_audit=build_data_source_audit(prepared_analysis.source_summary),
             )
         else:
             prompt_file_name = ""

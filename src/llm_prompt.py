@@ -118,6 +118,7 @@ def build_llm_report_prompt(
     dataset: Dataset,
     as_of: date,
     edinet_filings: pd.DataFrame | None = None,
+    data_source_audit: pd.DataFrame | None = None,
 ) -> str:
     rubric = load_rubric()
     industry_policy = load_industry_policy()
@@ -165,6 +166,7 @@ def build_llm_report_prompt(
     alpha_items = _bullet(list(rubric["assignment"]["alpha_analysis_items"]))
     banned_terms = "、".join(rubric["assignment"].get("banned_investment_advice_terms", []))
     edinet_context = edinet_filings.copy() if edinet_filings is not None else pd.DataFrame()
+    data_audit_context = data_source_audit.copy() if data_source_audit is not None else pd.DataFrame()
     edinet_status = (
         "EDINET取得済み書類メタデータあり。docID、提出者、書類種別、CSV/XBRL有無を出典候補として参照してください。"
         if not edinet_context.empty
@@ -203,6 +205,9 @@ def build_llm_report_prompt(
 
 ## EDINET取得済み書類メタデータ
 {_markdown_table(edinet_context, PROMPT_EDINET_COLUMNS)}
+
+## 分析データ監査
+{_markdown_table(data_audit_context)}
 
 ## 比較企業
 {_markdown_table(selected_companies)}

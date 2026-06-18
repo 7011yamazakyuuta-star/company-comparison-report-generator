@@ -64,3 +64,32 @@ def test_llm_prompt_can_include_edinet_filing_metadata():
     assert "S100TEST" in prompt
     assert "日本航空株式会社" in prompt
     assert "CSV/XBRL有無を出典候補" in prompt
+
+
+def test_llm_prompt_can_include_data_source_audit():
+    preset = load_presets()["friend_cafe_theme"]
+    audit = pd.DataFrame(
+        [
+            {
+                "証券コード": "3543",
+                "年度": 2024,
+                "データソース": "edinet_candidate",
+                "状態": "partial",
+                "確認メモ": "EDINET候補ですが、一部欠損があるため確認が必要です。",
+            }
+        ]
+    )
+
+    prompt = build_llm_report_prompt(
+        selected_tickers=preset["companies"],
+        preset={**preset, "preset_id": "friend_cafe_theme"},
+        app_mode="assignment",
+        industry_mode=preset["industry_mode"],
+        dataset=load_sample_dataset(),
+        as_of=date(2026, 6, 17),
+        data_source_audit=audit,
+    )
+
+    assert "分析データ監査" in prompt
+    assert "edinet_candidate" in prompt
+    assert "一部欠損" in prompt

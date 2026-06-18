@@ -3208,6 +3208,70 @@ def _render_workspace_summary(
     st.caption(f"選択中: {company_names} / 業種判定: {industry_label}")
 
 
+def _render_sidebar_open_script() -> None:
+    if not st.session_state.pop("request_open_settings_sidebar", False):
+        return
+    components.html(
+        """
+        <script>
+        const doc = window.parent.document;
+
+        function sidebarLooksOpen() {
+          const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
+          if (!sidebar) return false;
+          return sidebar.getBoundingClientRect().width > 120;
+        }
+
+        function clickOpenControl() {
+          if (sidebarLooksOpen()) return true;
+          const selectors = [
+            '[data-testid="collapsedControl"] button',
+            '[data-testid="collapsedControl"]',
+            '[data-testid="stSidebarCollapsedControl"] button',
+            '[data-testid="stSidebarCollapsedControl"]',
+            'button[aria-label="Open sidebar"]',
+            'button[aria-label="Expand sidebar"]',
+            'button[title="Open sidebar"]',
+            'button[title="Expand sidebar"]'
+          ];
+          for (const selector of selectors) {
+            const el = doc.querySelector(selector);
+            if (!el) continue;
+            const target = el.tagName === 'BUTTON' ? el : (el.querySelector('button') || el);
+            target.click();
+            return true;
+          }
+          return false;
+        }
+
+        setTimeout(clickOpenControl, 60);
+        setTimeout(clickOpenControl, 260);
+        setTimeout(clickOpenControl, 650);
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
+
+
+def _render_detail_settings_recovery(company_master: pd.DataFrame, selected_tickers: list[str]) -> None:
+    company_count = int(company_master["ticker"].astype(str).nunique()) if "ticker" in company_master.columns else len(company_master)
+    selected_count = len({str(ticker) for ticker in selected_tickers})
+    with st.container(border=True):
+        col_text, col_button = st.columns([2.6, 1])
+        with col_text:
+            st.markdown("**詳細設定パネル**")
+            st.caption(
+                f"左の設定パネルを閉じた場合は、ここから開き直せます。"
+                f" 現在の企業候補は {company_count:,} 社、選択中は {selected_count} 社です。"
+            )
+        with col_button:
+            if st.button("設定パネルを開く", key="open_settings_sidebar", use_container_width=True):
+                st.session_state.request_open_settings_sidebar = True
+                st.rerun()
+    _render_sidebar_open_script()
+
+
 def _preset_label(item: tuple[str, dict]) -> str:
     preset_id, preset = item
     return f"{preset.get('name', preset_id)} ({preset_id})"
@@ -3790,6 +3854,8 @@ def main() -> None:
             rubric=rubric,
         )
         return
+
+    _render_detail_settings_recovery(dataset.company_master, selected_tickers)
 
     _render_workspace_summary(
         preset_id=preset_id,

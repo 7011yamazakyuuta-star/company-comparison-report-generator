@@ -247,39 +247,58 @@ def _apply_style() -> None:
         body:has(.workflow-mode-auto) section.main {
             margin-left: 0 !important;
         }
-        body:has(.workflow-mode-detail) section[data-testid="stSidebar"],
-        body:has(.workflow-mode-detail) [data-testid="stSidebar"] {
-            display: block !important;
-            visibility: visible !important;
-            width: 22rem !important;
-            min-width: 22rem !important;
-            max-width: 22rem !important;
-            transform: translateX(0) !important;
-            margin-left: 0 !important;
-            opacity: 1 !important;
-        }
-        body:has(.workflow-mode-detail) [data-testid="stSidebarContent"],
-        body:has(.workflow-mode-detail) [data-testid="stSidebarUserContent"] {
-            display: block !important;
-            visibility: visible !important;
-            width: 22rem !important;
-            min-width: 22rem !important;
-            opacity: 1 !important;
-        }
         div[data-testid="stSidebar"] {
             background: var(--app-surface-soft);
             border-right: 1px solid var(--app-border);
             border-bottom: 0 !important;
             box-shadow: none !important;
+            overflow-x: hidden !important;
         }
         div[data-testid="stSidebarContent"] {
             padding-top: 1.35rem;
             border-bottom: 0 !important;
             box-shadow: none !important;
+            overflow-x: hidden !important;
         }
         div[data-testid="stSidebarUserContent"] {
             border-bottom: 0 !important;
             box-shadow: none !important;
+            overflow-x: hidden !important;
+        }
+        section[data-testid="stSidebar"] *,
+        div[data-testid="stSidebar"] * {
+            box-sizing: border-box;
+            max-width: 100%;
+        }
+        section[data-testid="stSidebar"] .element-container,
+        div[data-testid="stSidebar"] .element-container,
+        section[data-testid="stSidebar"] [data-testid="stVerticalBlock"],
+        div[data-testid="stSidebar"] [data-testid="stVerticalBlock"],
+        section[data-testid="stSidebar"] [data-baseweb="input"],
+        div[data-testid="stSidebar"] [data-baseweb="input"],
+        section[data-testid="stSidebar"] [data-baseweb="select"],
+        div[data-testid="stSidebar"] [data-baseweb="select"] {
+            width: 100% !important;
+            min-width: 0 !important;
+            max-width: 100% !important;
+        }
+        section[data-testid="stSidebar"] .stButton > button,
+        div[data-testid="stSidebar"] .stButton > button,
+        section[data-testid="stSidebar"] .stDownloadButton > button,
+        div[data-testid="stSidebar"] .stDownloadButton > button {
+            width: 100%;
+            white-space: normal !important;
+            overflow-wrap: anywhere !important;
+            word-break: break-word !important;
+            line-height: 1.25;
+        }
+        section[data-testid="stSidebar"] .stButton > button p,
+        div[data-testid="stSidebar"] .stButton > button p,
+        section[data-testid="stSidebar"] .stDownloadButton > button p,
+        div[data-testid="stSidebar"] .stDownloadButton > button p {
+            white-space: normal !important;
+            overflow-wrap: anywhere !important;
+            word-break: break-word !important;
         }
         div[data-testid="stSidebar"] h2,
         div[data-testid="stSidebar"] h3 {
@@ -3396,6 +3415,14 @@ def _render_sidebar_launcher(workflow_mode: str) -> None:
           return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
         }}
 
+        function clickTarget(el) {{
+          if (!el) return false;
+          const target = el.tagName === 'BUTTON' ? el : (el.querySelector('button') || el);
+          target.click();
+          target.dispatchEvent(new MouseEvent('click', {{ bubbles: true, cancelable: true, view: window.parent }}));
+          return true;
+        }}
+
         function openSidebar() {{
           if (sidebarLooksOpen()) return true;
           const selectors = [
@@ -3412,33 +3439,52 @@ def _render_sidebar_launcher(workflow_mode: str) -> None:
           ];
           for (const selector of selectors) {{
             const el = doc.querySelector(selector);
-            if (!visible(el)) continue;
-            const target = el.tagName === 'BUTTON' ? el : (el.querySelector('button') || el);
-            target.click();
-            return true;
+            if (clickTarget(el)) {{
+              setTimeout(updateLauncher, 120);
+              return true;
+            }}
           }}
           const buttons = Array.from(doc.querySelectorAll('button'));
           const button = buttons.find((candidate) => {{
-            const label = `${{candidate.getAttribute('aria-label') || ''}} ${{candidate.getAttribute('title') || ''}}`.toLowerCase();
-            return visible(candidate) && label.includes('sidebar') && (label.includes('open') || label.includes('expand'));
+            const label = `${{candidate.getAttribute('aria-label') || ''}} ${{candidate.getAttribute('title') || ''}} ${{candidate.textContent || ''}}`.toLowerCase();
+            return visible(candidate) && (
+              (label.includes('sidebar') && (label.includes('open') || label.includes('expand'))) ||
+              label.includes('サイドバー') ||
+              label.includes('詳細設定')
+            );
           }});
           if (button) {{
-            button.click();
+            clickTarget(button);
+            setTimeout(updateLauncher, 120);
             return true;
           }}
           const eventInit = {{ key: 'b', code: 'KeyB', ctrlKey: true, metaKey: false, bubbles: true }};
           doc.dispatchEvent(new KeyboardEvent('keydown', eventInit));
           window.parent.dispatchEvent(new KeyboardEvent('keydown', eventInit));
+          setTimeout(updateLauncher, 120);
           return false;
         }}
 
+        function updateLauncher() {{
+          if (!active) {{
+            launcher.style.display = 'none';
+            return;
+          }}
+          launcher.style.display = sidebarLooksOpen() ? 'none' : 'flex';
+        }}
+
         const launcher = getLauncher();
-        launcher.style.display = active ? 'flex' : 'none';
+        updateLauncher();
+        const observer = new MutationObserver(updateLauncher);
+        observer.observe(doc.body, {{ attributes: true, childList: true, subtree: true }});
+        window.parent.addEventListener('resize', updateLauncher);
+        setInterval(updateLauncher, 700);
 
         if (active && shouldOpen) {{
           setTimeout(openSidebar, 60);
           setTimeout(openSidebar, 260);
           setTimeout(openSidebar, 650);
+          setTimeout(updateLauncher, 900);
         }}
         </script>
         """,

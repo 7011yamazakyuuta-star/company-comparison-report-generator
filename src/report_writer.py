@@ -184,6 +184,7 @@ def _write_report(
     assignment_result: dict[str, object],
     rubric: dict[str, Any],
     as_of: date,
+    edinet_filings: pd.DataFrame | None = None,
 ) -> None:
     missing_label = _missing_label(rubric)
     assignment_table = build_assignment_response_table(rubric)
@@ -412,6 +413,31 @@ def _write_report(
     ]
     for reference in references:
         _add_paragraph(document, f"・{reference}", rubric)
+    edinet_context = edinet_filings.copy() if edinet_filings is not None else pd.DataFrame()
+    if not edinet_context.empty:
+        document.add_heading("EDINET取得済み書類メタデータ", level=2)
+        edinet_columns = [
+            "doc_id",
+            "edinet_code",
+            "sec_code",
+            "filer_name",
+            "doc_description",
+            "submit_datetime",
+            "csv_flag",
+        ]
+        edinet_labels = {
+            "doc_id": "docID",
+            "edinet_code": "EDINETコード",
+            "sec_code": "証券コード",
+            "filer_name": "提出者名",
+            "doc_description": "書類名",
+            "submit_datetime": "提出日時",
+            "csv_flag": "CSV",
+        }
+        edinet_table = edinet_context[[column for column in edinet_columns if column in edinet_context.columns]].rename(
+            columns=edinet_labels
+        )
+        _add_df_table(document, edinet_table.head(12), missing_label)
 
     document.add_heading("欠損データ注記", level=1)
     if missing_notes:
@@ -435,6 +461,7 @@ def build_report_package(
     dataset: Dataset | None = None,
     output_dir: Path = PROJECT_ROOT / "output",
     as_of: date | None = None,
+    edinet_filings: pd.DataFrame | None = None,
 ) -> ReportPackage:
     rubric = load_rubric()
     industry_policy = load_industry_policy()
@@ -482,6 +509,7 @@ def build_report_package(
         assignment_result=assignment_result,
         rubric=rubric,
         as_of=as_of,
+        edinet_filings=edinet_filings,
     )
 
     missing_notes = collect_missing_notes(metrics, _missing_label(rubric))

@@ -2,6 +2,7 @@ from datetime import date
 from pathlib import Path
 from uuid import uuid4
 
+import pandas as pd
 from docx import Document
 
 from src.config_loader import PROJECT_ROOT
@@ -32,6 +33,19 @@ def test_report_contains_required_sections_and_warning():
         dataset=load_sample_dataset(),
         output_dir=output_dir,
         as_of=date(2026, 6, 17),
+        edinet_filings=pd.DataFrame(
+            [
+                {
+                    "doc_id": "S100TEST",
+                    "edinet_code": "E32815",
+                    "sec_code": "35430",
+                    "filer_name": "テスト提出者",
+                    "doc_description": "有価証券報告書",
+                    "submit_datetime": "2026-06-18 10:00",
+                    "csv_flag": "1",
+                }
+            ]
+        ),
     )
 
     assert package.docx_path.exists()
@@ -49,4 +63,6 @@ def test_report_contains_required_sections_and_warning():
     ]:
         assert heading in text
     assert "JPX業種" in text
+    assert "S100TEST" in text
+    assert "E32815" in text
     assert "投資すべき" not in text

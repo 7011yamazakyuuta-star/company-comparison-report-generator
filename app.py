@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import base64
 from datetime import date, timedelta
 from html import escape
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from src.advanced_diagnostics import build_advanced_diagnostics
 from src.analysis_engine import (
@@ -2280,6 +2282,58 @@ def _transfer_tickers_to_edinet_tab(tickers: list[str]) -> None:
     st.rerun()
 
 
+def _fetch_report_edinet_filings(
+    selected_tickers: list[str],
+    *,
+    lookback_days: int = 120,
+    annual_only: bool = True,
+    csv_only: bool = False,
+) -> pd.DataFrame:
+    client = EdinetClient()
+    if not client.has_api_key or not selected_tickers:
+        return pd.DataFrame()
+
+    matched_rows = fetch_document_rows_for_tickers(
+        client,
+        selected_tickers,
+        end_date=date.today(),
+        lookback_days=lookback_days,
+        doc_type=2,
+        annual_only=annual_only,
+        csv_only=csv_only,
+    )
+    if matched_rows:
+        save_filings(matched_rows)
+        _clear_filings_cache()
+    return pd.DataFrame(matched_rows).drop(columns=["raw_json"], errors="ignore")
+
+
+def _render_report_edinet_status(edinet_filings: pd.DataFrame, selected_tickers: list[str]) -> None:
+    client = EdinetClient()
+    if not client.has_api_key:
+        st.info("EDINET_API_KEYが未設定のため、Word生成前の自動EDINET確認はスキップされます。")
+        return
+    if edinet_filings.empty:
+        st.caption("Word生成時にEDINET書類一覧も確認します。見つからない場合はサンプルCSV中心で作成します。")
+        return
+    st.success(f"EDINET書類メタデータを{len(edinet_filings)}件確認しました。")
+    st.dataframe(
+        _edinet_lookup_preview_table(edinet_filings.to_dict("records")),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+def _run_report_edinet_preflight(selected_tickers: list[str]) -> pd.DataFrame:
+    try:
+        return _fetch_report_edinet_filings(selected_tickers)
+    except EdinetApiError as exc:
+        st.warning(f"EDINET自動確認はスキップしました: {exc}")
+    except Exception as exc:  # pragma: no cover - Streamlit safety net
+        st.warning(f"EDINET自動確認中に予期しないエラーがありました: {exc}")
+    return pd.DataFrame()
+
+
 def _company_preview_table(company_master: pd.DataFrame, tickers: list[str]) -> pd.DataFrame:
     if not tickers:
         return pd.DataFrame(columns=["証券コード", "企業名", "JPX業種", "テーマ", "EDINETコード"])
@@ -2647,6 +2701,28 @@ def _build_prompt_download(
 def _render_llm_prompt_panel(*, file_name: str, prompt_text: str, key_prefix: str) -> None:
     st.markdown("**LLM用プロンプト**")
     st.code(prompt_text, language="markdown", wrap_lines=True, height=420)
+    encoded_prompt = base64.b64encode(prompt_text.encode("utf-8")).decode("ascii")
+    copy_html = f"""
+    <button
+      type="button"
+      style="
+        width: 100%;
+        border: 1px solid rgba(0, 113, 227, 0.24);
+        border-radius: 999px;
+        padding: 12px 16px;
+        background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(245,248,255,0.78));
+        color: #0066cc;
+        font-weight: 700;
+        font-size: 15px;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.95), 0 10px 26px rgba(0,113,227,0.12);
+        cursor: pointer;
+      "
+      onclick="const raw = atob('{encoded_prompt}'); const bytes = Uint8Array.from(raw, c => c.charCodeAt(0)); const text = new TextDecoder().decode(bytes); navigator.clipboard.writeText(text).then(() => this.textContent = 'コピーしました').catch(() => this.textContent = 'コピーできませんでした')"
+    >
+      プロンプトをコピー
+    </button>
+    """
+    components.html(copy_html, height=58)
     st.download_button(
         "Markdownをダウンロード",
         data=prompt_text.encode("utf-8"),
@@ -2932,6 +3008,7 @@ def _render_auto_mode(
         disabled = len(selected_tickers) < int(rubric["assignment"]["min_companies"])
         if st.button("Wordレポートを作成", type="primary", disabled=disabled, width="stretch", key="wizard_generate_report"):
             with st.spinner("レポートを作成しています..."):
+                edinet_filings = _run_report_edinet_preflight(selected_tickers)
                 package = build_report_package(
                     selected_tickers=selected_tickers,
                     preset={**preset, "preset_id": preset_id},
@@ -2939,8 +3016,10 @@ def _render_auto_mode(
                     industry_mode=industry_mode,
                     dataset=dataset,
                     as_of=date.today(),
+                    edinet_filings=edinet_filings,
                 )
             st.success(f"生成しました: {package.docx_path.name}")
+            _render_report_edinet_status(edinet_filings, selected_tickers)
             with package.docx_path.open("rb") as f:
                 st.download_button(
                     "Wordをダウンロード",
@@ -3609,6 +3688,7 @@ def main() -> None:
             )
         if generate_clicked:
             with st.spinner("レポートを作成しています..."):
+                edinet_filings = _run_report_edinet_preflight(selected_tickers)
                 package = build_report_package(
                     selected_tickers=selected_tickers,
                     preset={**preset, "preset_id": preset_id},
@@ -3616,8 +3696,10 @@ def main() -> None:
                     industry_mode=industry_mode,
                     dataset=analysis_dataset,
                     as_of=date.today(),
+                    edinet_filings=edinet_filings,
                 )
             st.success(f"生成しました: {package.docx_path.name}")
+            _render_report_edinet_status(edinet_filings, selected_tickers)
 
             with package.docx_path.open("rb") as f:
                 st.download_button(

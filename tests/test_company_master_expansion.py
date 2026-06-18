@@ -74,3 +74,38 @@ def test_edinet_lookup_preview_table_normalizes_sec_code():
 
     assert table.loc[0, "証券コード"] == "9999"
     assert table.loc[0, "CSV"] == "あり"
+
+
+def test_latest_csv_filings_by_ticker_picks_one_per_company():
+    import pandas as pd
+
+    from app import _infer_fiscal_year_from_filing, _latest_csv_filings_by_ticker
+
+    filings = pd.DataFrame(
+        [
+            {
+                "doc_id": "OLD",
+                "sec_code": "35430",
+                "submit_datetime": "2025-06-20 10:00",
+                "csv_flag": "1",
+            },
+            {
+                "doc_id": "NEW",
+                "sec_code": "35430",
+                "submit_datetime": "2026-06-20 10:00",
+                "csv_flag": "1",
+            },
+            {
+                "doc_id": "OTHER",
+                "sec_code": "30870",
+                "submit_datetime": "2026-06-21 10:00",
+                "csv_flag": "1",
+            },
+        ]
+    )
+
+    latest = _latest_csv_filings_by_ticker(filings, ["3543", "3087"])
+
+    assert latest["doc_id"].tolist() == ["NEW", "OTHER"]
+    assert latest["_ticker"].tolist() == ["3543", "3087"]
+    assert _infer_fiscal_year_from_filing(latest.iloc[0]) == 2026

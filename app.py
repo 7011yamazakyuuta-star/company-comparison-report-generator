@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from dataclasses import dataclass
 from datetime import date, timedelta
 from html import escape
 
@@ -97,6 +98,14 @@ EDINET_LOOKBACK_PRESETS = [
     ("wide", 90, "広め", "提出日が少しずれた企業も拾いやすくします。"),
     ("max", 120, "最大", "見つからない時の最終確認向けです。"),
 ]
+
+
+@dataclass
+class ReportEdinetPreflight:
+    filings: pd.DataFrame
+    financial_rows: pd.DataFrame
+    messages: list[str]
+    warnings: list[str]
 
 
 def _apply_style() -> None:
@@ -2282,6 +2291,41 @@ def _transfer_tickers_to_edinet_tab(tickers: list[str]) -> None:
     st.rerun()
 
 
+def _ticker_from_sec_code(sec_code: object) -> str:
+    digits = "".join(char for char in str(sec_code or "") if char.isdigit())
+    return digits[:4] if len(digits) >= 4 else ""
+
+
+def _infer_fiscal_year_from_filing(row: pd.Series | dict) -> int:
+    value = row.get("submit_datetime", "") if isinstance(row, dict) else row.get("submit_datetime", "")
+    parsed = pd.to_datetime(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(parsed):
+        return date.today().year
+    return int(parsed.year)
+
+
+def _latest_csv_filings_by_ticker(filings: pd.DataFrame, selected_tickers: list[str]) -> pd.DataFrame:
+    if filings.empty:
+        return filings.copy()
+    if "sec_code" not in filings.columns:
+        return pd.DataFrame(columns=list(filings.columns) + ["_ticker"])
+
+    rows = []
+    for ticker in selected_tickers:
+        candidates = sec_code_candidates(ticker)
+        ticker_filings = filings[
+            filings["sec_code"].fillna("").astype(str).str.replace(r"\D", "", regex=True).isin(candidates)
+        ].copy()
+        if ticker_filings.empty:
+            continue
+        ticker_filings["_ticker"] = str(ticker)
+        ticker_filings["_submit_sort"] = pd.to_datetime(ticker_filings.get("submit_datetime", ""), errors="coerce")
+        rows.append(ticker_filings.sort_values(["_submit_sort", "doc_id"], ascending=[False, False]).head(1))
+    if not rows:
+        return pd.DataFrame(columns=list(filings.columns) + ["_ticker"])
+    return pd.concat(rows, ignore_index=True).drop(columns=["_submit_sort"], errors="ignore")
+
+
 def _fetch_report_edinet_filings(
     selected_tickers: list[str],
     *,
@@ -2308,30 +2352,86 @@ def _fetch_report_edinet_filings(
     return pd.DataFrame(matched_rows).drop(columns=["raw_json"], errors="ignore")
 
 
-def _render_report_edinet_status(edinet_filings: pd.DataFrame, selected_tickers: list[str]) -> None:
+def _extract_report_edinet_financial_rows(
+    client: EdinetClient,
+    filings: pd.DataFrame,
+    selected_tickers: list[str],
+) -> ReportEdinetPreflight:
+    messages: list[str] = []
+    warnings: list[str] = []
+    latest_filings = _latest_csv_filings_by_ticker(filings, selected_tickers)
+    if latest_filings.empty:
+        return ReportEdinetPreflight(filings=filings, financial_rows=pd.DataFrame(), messages=messages, warnings=warnings)
+
+    for row in latest_filings.to_dict("records"):
+        doc_id = str(row.get("doc_id", "")).strip()
+        ticker = str(row.get("_ticker") or _ticker_from_sec_code(row.get("sec_code"))).strip()
+        if not doc_id or not ticker:
+            continue
+        existing_facts = load_extracted_facts(doc_id=doc_id)
+        if not existing_facts.empty:
+            messages.append(f"{ticker}: {doc_id} は解析済みです。")
+            continue
+
+        try:
+            document_file = client.fetch_document_file(doc_id, file_type=5)
+            saved_path = save_raw_document(document_file)
+            facts = extract_financial_facts_from_zip(saved_path)
+        except EdinetApiError as exc:
+            warnings.append(f"{ticker}: {doc_id} のCSV取得をスキップしました: {exc}")
+            continue
+        except Exception as exc:  # pragma: no cover - Streamlit safety net
+            warnings.append(f"{ticker}: {doc_id} のCSV解析をスキップしました: {exc}")
+            continue
+
+        if not facts:
+            warnings.append(f"{ticker}: {doc_id} から主要財務タグを抽出できませんでした。")
+            continue
+        fiscal_year = _infer_fiscal_year_from_filing(row)
+        saved_count = save_extracted_facts(doc_id=doc_id, ticker=ticker, fiscal_year=fiscal_year, facts=facts)
+        messages.append(f"{ticker}: {doc_id} から主要財務タグを{saved_count}件保存しました。")
+
+    financial_rows = load_edinet_financial_rows(tickers=selected_tickers)
+    return ReportEdinetPreflight(
+        filings=filings,
+        financial_rows=financial_rows,
+        messages=messages,
+        warnings=warnings,
+    )
+
+
+def _render_report_edinet_status(preflight: ReportEdinetPreflight, selected_tickers: list[str]) -> None:
     client = EdinetClient()
     if not client.has_api_key:
         st.info("EDINET_API_KEYが未設定のため、Word生成前の自動EDINET確認はスキップされます。")
         return
-    if edinet_filings.empty:
+    if preflight.filings.empty:
         st.caption("Word生成時にEDINET書類一覧も確認します。見つからない場合はサンプルCSV中心で作成します。")
         return
-    st.success(f"EDINET書類メタデータを{len(edinet_filings)}件確認しました。")
+    st.success(f"EDINET書類メタデータを{len(preflight.filings)}件確認しました。")
     st.dataframe(
-        _edinet_lookup_preview_table(edinet_filings.to_dict("records")),
+        _edinet_lookup_preview_table(preflight.filings.to_dict("records")),
         use_container_width=True,
         hide_index=True,
     )
+    for message in preflight.messages[:8]:
+        st.caption(message)
+    for warning in preflight.warnings[:8]:
+        st.warning(warning)
+    if not preflight.financial_rows.empty:
+        st.caption(f"EDINET解析済み財務行: {len(preflight.financial_rows)}件。今回のWord生成では取得済み行を優先候補として使います。")
 
 
-def _run_report_edinet_preflight(selected_tickers: list[str]) -> pd.DataFrame:
+def _run_report_edinet_preflight(selected_tickers: list[str]) -> ReportEdinetPreflight:
     try:
-        return _fetch_report_edinet_filings(selected_tickers)
+        filings = _fetch_report_edinet_filings(selected_tickers, annual_only=True, csv_only=True)
+        client = EdinetClient()
+        return _extract_report_edinet_financial_rows(client, filings, selected_tickers)
     except EdinetApiError as exc:
         st.warning(f"EDINET自動確認はスキップしました: {exc}")
     except Exception as exc:  # pragma: no cover - Streamlit safety net
         st.warning(f"EDINET自動確認中に予期しないエラーがありました: {exc}")
-    return pd.DataFrame()
+    return ReportEdinetPreflight(filings=pd.DataFrame(), financial_rows=pd.DataFrame(), messages=[], warnings=[])
 
 
 def _company_preview_table(company_master: pd.DataFrame, tickers: list[str]) -> pd.DataFrame:
@@ -3008,18 +3108,24 @@ def _render_auto_mode(
         disabled = len(selected_tickers) < int(rubric["assignment"]["min_companies"])
         if st.button("Wordレポートを作成", type="primary", disabled=disabled, width="stretch", key="wizard_generate_report"):
             with st.spinner("レポートを作成しています..."):
-                edinet_filings = _run_report_edinet_preflight(selected_tickers)
+                preflight = _run_report_edinet_preflight(selected_tickers)
+                report_prepared = prepare_analysis_dataset(
+                    dataset,
+                    selected_tickers,
+                    source_mode=DATA_SOURCE_EDINET_OVERLAY,
+                    edinet_rows=preflight.financial_rows,
+                )
                 package = build_report_package(
                     selected_tickers=selected_tickers,
                     preset={**preset, "preset_id": preset_id},
                     app_mode=app_mode,
                     industry_mode=industry_mode,
-                    dataset=dataset,
+                    dataset=report_prepared.dataset,
                     as_of=date.today(),
-                    edinet_filings=edinet_filings,
+                    edinet_filings=preflight.filings,
                 )
             st.success(f"生成しました: {package.docx_path.name}")
-            _render_report_edinet_status(edinet_filings, selected_tickers)
+            _render_report_edinet_status(preflight, selected_tickers)
             with package.docx_path.open("rb") as f:
                 st.download_button(
                     "Wordをダウンロード",
@@ -3688,18 +3794,24 @@ def main() -> None:
             )
         if generate_clicked:
             with st.spinner("レポートを作成しています..."):
-                edinet_filings = _run_report_edinet_preflight(selected_tickers)
+                preflight = _run_report_edinet_preflight(selected_tickers)
+                report_prepared = prepare_analysis_dataset(
+                    dataset,
+                    selected_tickers,
+                    source_mode=DATA_SOURCE_EDINET_OVERLAY,
+                    edinet_rows=preflight.financial_rows,
+                )
                 package = build_report_package(
                     selected_tickers=selected_tickers,
                     preset={**preset, "preset_id": preset_id},
                     app_mode=app_mode,
                     industry_mode=industry_mode,
-                    dataset=analysis_dataset,
+                    dataset=report_prepared.dataset,
                     as_of=date.today(),
-                    edinet_filings=edinet_filings,
+                    edinet_filings=preflight.filings,
                 )
             st.success(f"生成しました: {package.docx_path.name}")
-            _render_report_edinet_status(edinet_filings, selected_tickers)
+            _render_report_edinet_status(preflight, selected_tickers)
 
             with package.docx_path.open("rb") as f:
                 st.download_button(

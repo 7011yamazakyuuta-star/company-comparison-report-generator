@@ -13,6 +13,12 @@ from src.analysis_engine import (
     build_profit_bridge_table,
     build_sensitivity_risk_table,
 )
+from src.analysis_dataset import (
+    DATA_SOURCE_EDINET_OVERLAY,
+    DATA_SOURCE_SAMPLE,
+    PreparedAnalysisDataset,
+    prepare_analysis_dataset,
+)
 from src.assignment_filters import check_assignment_conditions
 from src.company_master import select_companies
 from src.config_loader import load_industry_policy, load_presets, load_rubric
@@ -2438,6 +2444,43 @@ def _compute_metrics_for_selection(dataset, selected_tickers: list[str]) -> pd.D
     return metrics.sort_values(["_selection_order", "fiscal_year"]).reset_index(drop=True)
 
 
+def _render_analysis_data_source_panel(prepared: PreparedAnalysisDataset) -> None:
+    st.markdown("**分析データ**")
+    st.caption("通常はサンプルCSVを使います。EDINET候補は抽出済みデータの検証用で、欠損がある場合は慎重に確認してください。")
+    mode_options = [DATA_SOURCE_SAMPLE, DATA_SOURCE_EDINET_OVERLAY]
+    if st.session_state.get("analysis_data_source_mode") not in mode_options:
+        st.session_state.analysis_data_source_mode = DATA_SOURCE_SAMPLE
+    selected = st.segmented_control(
+        "分析データ",
+        options=mode_options,
+        required=True,
+        format_func=lambda value: "EDINET候補を優先" if value == DATA_SOURCE_EDINET_OVERLAY else "サンプルCSV",
+        key="analysis_data_source_mode",
+        label_visibility="collapsed",
+        width="stretch",
+    )
+    if selected == DATA_SOURCE_EDINET_OVERLAY and prepared.edinet_rows.empty:
+        st.info("保存済みEDINET抽出候補はまだありません。EDINET取得タブでCSV ZIPを取得・解析すると候補が表示されます。")
+    elif selected == DATA_SOURCE_EDINET_OVERLAY:
+        st.info("同じ証券コード・年度のEDINET候補がある場合だけ、サンプルCSVより優先します。欠損値はレポート上で注記対象です。")
+
+    if not prepared.source_summary.empty:
+        st.dataframe(
+            prepared.source_summary.rename(
+                columns={
+                    "ticker": "証券コード",
+                    "fiscal_year": "年度",
+                    "data_source": "データソース",
+                    "doc_id": "docID",
+                    "available_metrics": "取得済み項目数",
+                    "missing_metrics": "欠損項目数",
+                }
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+
 def _score_preview_table(scores: pd.DataFrame) -> pd.DataFrame:
     columns = [
         "ticker",
@@ -3215,6 +3258,8 @@ def main() -> None:
         st.session_state.selected_preset_id_last = st.session_state.selected_preset_id
     if "custom_selected_tickers" not in st.session_state:
         st.session_state.custom_selected_tickers = []
+    if "analysis_data_source_mode" not in st.session_state:
+        st.session_state.analysis_data_source_mode = DATA_SOURCE_SAMPLE
     industry_modes = list(industry_policy["industry_modes"].keys())
     if "industry_mode" not in st.session_state or st.session_state.industry_mode not in industry_modes:
         st.session_state.industry_mode = str(active_preset.get("industry_mode", rubric["assignment"]["default_industry_mode"]))
@@ -3316,6 +3361,17 @@ def main() -> None:
         preset_id = "custom_selection"
 
     selected_companies = select_companies(dataset.company_master, selected_tickers)
+    analysis_source_mode = (
+        DATA_SOURCE_SAMPLE
+        if workflow_mode == "auto"
+        else str(st.session_state.get("analysis_data_source_mode", DATA_SOURCE_SAMPLE))
+    )
+    prepared_analysis = prepare_analysis_dataset(
+        dataset,
+        selected_tickers,
+        source_mode=analysis_source_mode,
+    )
+    analysis_dataset = prepared_analysis.dataset
     preview = check_assignment_conditions(
         selected_companies,
         app_mode=app_mode,
@@ -3336,7 +3392,7 @@ def main() -> None:
             selected_tickers=selected_tickers,
             selected_companies=selected_companies,
             preview=preview,
-            dataset=dataset,
+            dataset=analysis_dataset,
             industry_policy=industry_policy,
             rubric=rubric,
         )
@@ -3399,8 +3455,9 @@ def main() -> None:
             "表、グラフ、警告、欠損注記、参考資料をまとめた日本語Wordファイルを作成します。",
         )
         disabled = len(selected_tickers) < int(rubric["assignment"]["min_companies"])
+        _render_analysis_data_source_panel(prepared_analysis)
         if not disabled:
-            report_metrics_preview = _compute_metrics_for_selection(dataset, selected_tickers)
+            report_metrics_preview = _compute_metrics_for_selection(analysis_dataset, selected_tickers)
             _render_plus_alpha_preview(
                 report_metrics_preview,
                 selected_companies,
@@ -3414,7 +3471,7 @@ def main() -> None:
                 preset=preset,
                 app_mode=app_mode,
                 industry_mode=industry_mode,
-                dataset=dataset,
+                dataset=analysis_dataset,
             )
         else:
             prompt_file_name = ""
@@ -3438,7 +3495,7 @@ def main() -> None:
                     preset={**preset, "preset_id": preset_id},
                     app_mode=app_mode,
                     industry_mode=industry_mode,
-                    dataset=dataset,
+                    dataset=analysis_dataset,
                     as_of=date.today(),
                 )
             st.success(f"生成しました: {package.docx_path.name}")

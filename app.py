@@ -29,8 +29,9 @@ from src.config_loader import load_industry_policy, load_presets, load_rubric
 from src.course_framework import build_plus_alpha_analysis_table, build_required_plus_alpha_table
 from src.data_loader import DEFAULT_DB_PATH, load_dataset
 from src.edinet_client import EdinetApiError, EdinetClient, extract_document_rows
+from src.edinet_company_directory import overlay_dataset_company_master
 from src.edinet_files import save_raw_document
-from src.edinet_lookup import fetch_document_rows_for_tickers, sec_code_candidates
+from src.edinet_lookup import fetch_document_rows_for_tickers, fetch_document_rows_in_period, sec_code_candidates
 from src.edinet_parser import extract_financial_facts_from_zip, facts_to_financial_row, summarize_facts
 from src.edinet_repository import (
     filter_filings,
@@ -2485,6 +2486,10 @@ def _render_company_search_selector(
     label_lookup = _company_label_lookup(company_master)
     valid_tickers = set(company_master["ticker"].astype(str))
     selected_state_key = f"{key_prefix}_selected_tickers"
+    notice_key = f"{key_prefix}_edinet_lookup_notice"
+    if st.session_state.get(notice_key):
+        st.success(str(st.session_state[notice_key]))
+        del st.session_state[notice_key]
     current_default = [
         str(ticker)
         for ticker in st.session_state.get(selected_state_key, default_tickers)
@@ -2633,7 +2638,10 @@ def _render_company_search_selector(
                 st.session_state[lookup_tickers_key] = missing_direct_tickers
                 st.session_state["edinet_ticker_lookup"] = missing_text
                 if matched_rows:
-                    st.success(f"EDINETで{len(matched_rows)}件見つかりました。{saved_count}件をSQLiteに保存しました。")
+                    st.session_state[notice_key] = (
+                        f"EDINETで{len(matched_rows)}件見つかりました。候補辞書を更新しました。"
+                    )
+                    st.rerun()
                 else:
                     st.info("指定期間内のEDINET書類一覧では見つかりませんでした。期間を広げてEDINET取得タブで確認できます。")
         with detail_col:
@@ -3231,8 +3239,23 @@ def _load_filings_cached(limit: int) -> pd.DataFrame:
     return load_filings(limit=limit)
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def _load_filings_for_company_directory(limit: int) -> pd.DataFrame:
+    return load_filings(limit=limit)
+
+
 def _clear_filings_cache() -> None:
     _load_filings_cached.clear()
+    _load_filings_for_company_directory.clear()
+
+
+def _load_dataset_with_edinet_directory():
+    dataset = _load_dataset_with_edinet_directory()
+    try:
+        filings = _load_filings_for_company_directory(50_000)
+    except Exception:
+        return dataset
+    return overlay_dataset_company_master(dataset, filings)
 
 
 def _ordered_presets(presets: dict[str, dict]) -> list[tuple[str, dict]]:
@@ -3273,8 +3296,9 @@ def _render_edinet_panel(selected_companies: pd.DataFrame | None = None) -> None
     col_b.metric("保存先", "SQLite")
     col_c.metric("取得単位", "1日分")
     st.info(
-        "現在のレポート計算はサンプルCSVを使います。EDINET連携は、証券コードから書類一覧を検索し、"
-        "CSV ZIPの保存と主要財務タグ候補の抽出まで対応しています。取得値をレポート計算へ自動反映する処理は次の拡張対象です。"
+        "通常表示はサンプルCSVを基準にします。EDINET連携は、証券コードから書類一覧を検索し、"
+        "CSV ZIPの保存、主要財務タグ候補の抽出、Word生成時の候補反映まで対応しています。"
+        "欠損が多い場合はサンプルCSVや注記と照合してください。"
     )
 
     selected_companies = selected_companies if selected_companies is not None else pd.DataFrame()
@@ -3321,6 +3345,44 @@ def _render_edinet_panel(selected_companies: pd.DataFrame | None = None) -> None
                 return
 
         st.success(f"{len(rows)}件を取得し、{saved_count}件を保存しました。")
+
+    st.markdown("**企業候補辞書を広げる**")
+    st.caption(
+        "指定期間内のEDINET提出者から、証券コード・提出者名・EDINETコードをSQLiteに蓄積します。"
+        "検索候補は次の再描画から自動で増えます。財務CSV本体はWord生成時や個別CSV取得時に取得します。"
+    )
+    directory_days = st.selectbox(
+        "辞書更新期間",
+        options=[30, 45, 90, 120],
+        index=1,
+        format_func=lambda value: f"直近{value}日分",
+        key="edinet_directory_lookback_days",
+    )
+    if st.button(
+        "期間内の提出者で候補辞書を更新",
+        disabled=not client.has_api_key,
+        width="stretch",
+        key="edinet_update_company_directory",
+    ):
+        with st.spinner("EDINETの提出者一覧を日付ごとに確認しています..."):
+            try:
+                rows = fetch_document_rows_in_period(
+                    client,
+                    end_date=target_date,
+                    lookback_days=int(directory_days),
+                    doc_type=doc_type,
+                    annual_only=False,
+                    csv_only=False,
+                )
+                saved_count = save_filings(rows)
+                _clear_filings_cache()
+            except EdinetApiError as exc:
+                st.error(f"取得できませんでした: {exc}")
+                return
+            except Exception as exc:  # pragma: no cover - Streamlit safety net
+                st.error(f"予期しないエラーです: {exc}")
+                return
+        st.success(f"{len(rows)}件の提出者候補を確認し、{saved_count}件を保存しました。")
 
     st.divider()
     _render_section_intro(
@@ -3499,7 +3561,7 @@ def _render_edinet_panel(selected_companies: pd.DataFrame | None = None) -> None
                     )
                     st.caption(
                         f"CSV ZIPから主要財務タグ候補を抽出し、SQLiteに{saved_count}件保存しました。"
-                        "現時点では確認用で、レポート計算への自動反映は次の段階です。"
+                        "同じ証券コード・年度のEDINET候補は、検証モードやWord生成前確認で優先候補として使えます。"
                     )
                     st.dataframe(summarize_facts(facts).head(30), use_container_width=True, hide_index=True)
                     normalized_preview = facts_to_financial_row(

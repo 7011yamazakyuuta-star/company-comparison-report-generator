@@ -13,6 +13,10 @@ import pandas as pd
 
 FINANCIAL_TAG_ALIASES = {
     "revenue": [
+        "RevenueFromContractsWithCustomersExcludingAssessedTax",
+        "RevenueFromContractsWithCustomers",
+        "NetSalesSummaryOfBusinessResults",
+        "SalesRevenue",
         "NetSales",
         "Revenue",
         "OperatingRevenue",
@@ -22,11 +26,18 @@ FINANCIAL_TAG_ALIASES = {
         "収益",
     ],
     "operating_income": [
+        "ProfitLossFromOperatingActivities",
+        "OperatingIncomeLoss",
+        "OperatingProfitLoss",
         "OperatingIncome",
         "OperatingProfit",
         "営業利益",
     ],
     "net_income": [
+        "ProfitLossAttributableToOwnersOfParent",
+        "ProfitAttributableToOwnersOfParent",
+        "ProfitLossForPeriod",
+        "NetIncomeLoss",
         "ProfitLoss",
         "NetIncome",
         "親会社株主に帰属する当期純利益",
@@ -39,28 +50,37 @@ FINANCIAL_TAG_ALIASES = {
         "総資産",
     ],
     "equity": [
+        "EquityAttributableToOwnersOfParent",
+        "EquityAttributableToOwnersOfParentIFRSSummaryOfBusinessResults",
+        "TotalEquity",
         "Equity",
         "NetAssets",
         "純資産",
         "純資産合計",
     ],
     "current_assets": [
+        "AssetsCurrent",
         "CurrentAssets",
         "流動資産",
         "流動資産合計",
     ],
     "current_liabilities": [
+        "LiabilitiesCurrent",
         "CurrentLiabilities",
         "流動負債",
         "流動負債合計",
     ],
     "fixed_assets": [
+        "AssetsNoncurrent",
+        "NonCurrentAssets",
         "NoncurrentAssets",
         "FixedAssets",
         "固定資産",
         "非流動資産",
     ],
     "long_term_liabilities": [
+        "LiabilitiesNoncurrent",
+        "NonCurrentLiabilities",
         "NoncurrentLiabilities",
         "LongTermLiabilities",
         "固定負債",
@@ -68,22 +88,29 @@ FINANCIAL_TAG_ALIASES = {
     ],
     "cash_flow_operating": [
         "NetCashProvidedByUsedInOperatingActivities",
+        "CashFlowsFromUsedInOperatingActivities",
         "CashFlowsFromOperatingActivities",
         "営業活動によるキャッシュ・フロー",
     ],
     "cash_flow_investing": [
         "NetCashProvidedByUsedInInvestmentActivities",
+        "CashFlowsFromUsedInInvestmentActivities",
         "CashFlowsFromInvestingActivities",
         "投資活動によるキャッシュ・フロー",
     ],
     "cash_flow_financing": [
         "NetCashProvidedByUsedInFinancingActivities",
+        "CashFlowsFromUsedInFinancingActivities",
         "CashFlowsFromFinancingActivities",
         "財務活動によるキャッシュ・フロー",
     ],
     "capex": [
+        "PaymentsForAcquisitionOfPropertyPlantAndEquipment",
+        "PurchaseOfPropertyPlantAndEquipmentAndIntangibleAssets",
         "PurchaseOfPropertyPlantAndEquipment",
         "PaymentsForPurchaseOfPropertyPlantAndEquipment",
+        "AcquisitionOfPropertyPlantAndEquipment",
+        "CapitalExpenditure",
         "有形固定資産の取得による支出",
         "設備投資",
     ],
@@ -110,11 +137,18 @@ def list_csv_members(zip_path: Path) -> list[str]:
 
 
 def _decode_bytes(raw: bytes) -> str:
-    for encoding in ("utf-16", "utf-8-sig", "cp932", "utf-8"):
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return raw.decode("utf-16")
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return raw.decode("utf-8-sig")
+
+    for encoding in ("utf-8-sig", "cp932", "utf-8", "utf-16"):
         try:
-            return raw.decode(encoding)
-        except UnicodeDecodeError:
+            text = raw.decode(encoding)
+        except UnicodeError:
             continue
+        if "\x00" not in text[:200]:
+            return text
     return raw.decode("utf-8", errors="replace")
 
 
@@ -136,7 +170,7 @@ def _normalized(text: object) -> str:
     return re.sub(r"[\s_\-:：/・（）()]+", "", str(text or "")).casefold()
 
 
-def _numeric_value(value: object) -> float | None:
+def _numeric_value(value: object, unit_text: object = "") -> float | None:
     text = str(value or "").strip()
     if not text or text in {"-", "－", "推定不可"}:
         return None
@@ -147,9 +181,13 @@ def _numeric_value(value: object) -> float | None:
     if not match:
         return None
     try:
-        return float(match.group(0))
+        numeric = float(match.group(0))
     except ValueError:
         return None
+    normalized_unit = _normalized(unit_text)
+    if normalized_unit in {"jpy", "円", "日本円"} or "iso4217jpy" in normalized_unit:
+        return numeric / 1_000_000
+    return numeric
 
 
 def _first_matching_column(columns: Iterable[str], candidates: Iterable[str]) -> str | None:
@@ -157,7 +195,12 @@ def _first_matching_column(columns: Iterable[str], candidates: Iterable[str]) ->
     for candidate in candidates:
         normalized_candidate = _normalized(candidate)
         for column, normalized_column in normalized_columns.items():
-            if normalized_column == normalized_candidate or normalized_candidate in normalized_column:
+            if normalized_column == normalized_candidate:
+                return column
+    for candidate in candidates:
+        normalized_candidate = _normalized(candidate)
+        for column, normalized_column in normalized_columns.items():
+            if normalized_candidate in normalized_column:
                 return column
     return None
 
@@ -166,14 +209,53 @@ def _row_text(row: pd.Series, columns: Iterable[str]) -> str:
     return " ".join(str(row.get(column, "")) for column in columns)
 
 
-def _metric_for_row(row_text: str) -> tuple[str, str] | None:
-    normalized_row = _normalized(row_text)
+def _flatten_aliases() -> list[tuple[str, str, str]]:
+    flattened: list[tuple[str, str, str]] = []
     for metric, aliases in FINANCIAL_TAG_ALIASES.items():
         for alias in aliases:
             normalized_alias = _normalized(alias)
-            if normalized_alias and normalized_alias in normalized_row:
-                return metric, alias
+            if normalized_alias:
+                flattened.append((metric, alias, normalized_alias))
+    return sorted(flattened, key=lambda item: len(item[2]), reverse=True)
+
+
+def _metric_for_row(row_text: str) -> tuple[str, str] | None:
+    normalized_row = _normalized(row_text)
+    for metric, alias, normalized_alias in _flatten_aliases():
+        if normalized_alias in normalized_row:
+            return metric, alias
     return None
+
+
+def _fact_score(fact: EdinetCsvFact, metric: str) -> int:
+    text = _normalized(f"{fact.raw_key} {fact.label} {fact.context} {fact.source_file}")
+    score = 0
+    if "currentyear" in text or "current" in text:
+        score += 30
+    if "prioryear" in text or "previous" in text or "prior" in text:
+        score -= 30
+    if "consolidated" in text or "連結" in text:
+        score += 12
+    if "nonconsolidated" in text or "個別" in text:
+        score -= 10
+    flow_metrics = {
+        "revenue",
+        "operating_income",
+        "net_income",
+        "cash_flow_operating",
+        "cash_flow_investing",
+        "cash_flow_financing",
+        "capex",
+    }
+    if metric in flow_metrics and "duration" in text:
+        score += 10
+    if metric not in flow_metrics and "instant" in text:
+        score += 10
+    if "quarter" in text or "interim" in text or "sixmonth" in text or "threemonth" in text:
+        score -= 12
+    if "segment" in text:
+        score -= 8
+    return score
 
 
 def extract_financial_facts_from_zip(zip_path: Path) -> list[EdinetCsvFact]:
@@ -204,6 +286,10 @@ def extract_financial_facts_from_zip(zip_path: Path) -> list[EdinetCsvFact]:
                 table.columns,
                 ["context", "コンテキスト", "contextref", "contextRef", "期間"],
             )
+            unit_column = _first_matching_column(
+                table.columns,
+                ["unit", "unitRef", "ユニット", "単位", "単位ID"],
+            )
             search_columns = [column for column in [key_column, label_column] if column]
             if not search_columns:
                 search_columns = list(table.columns[: min(4, len(table.columns))])
@@ -213,7 +299,7 @@ def extract_financial_facts_from_zip(zip_path: Path) -> list[EdinetCsvFact]:
                 row_match = _metric_for_row(_row_text(row_series, search_columns))
                 if row_match is None:
                     continue
-                value = _numeric_value(row_series.get(value_column))
+                value = _numeric_value(row_series.get(value_column), row_series.get(unit_column, "") if unit_column else "")
                 if value is None:
                     continue
                 metric, matched_alias = row_match
@@ -250,6 +336,10 @@ def summarize_facts(facts: list[EdinetCsvFact]) -> pd.DataFrame:
 def facts_to_financial_row(*, ticker: str, fiscal_year: int, facts: list[EdinetCsvFact]) -> dict[str, object]:
     row: dict[str, object] = {"ticker": str(ticker), "fiscal_year": int(fiscal_year)}
     for metric in FINANCIAL_TAG_ALIASES:
-        metric_values = [fact.value for fact in facts if fact.metric == metric]
-        row[metric] = metric_values[0] if metric_values else None
+        metric_facts = [fact for fact in facts if fact.metric == metric]
+        if not metric_facts:
+            row[metric] = None
+            continue
+        best_fact = max(metric_facts, key=lambda fact: _fact_score(fact, metric))
+        row[metric] = best_fact.value
     return row

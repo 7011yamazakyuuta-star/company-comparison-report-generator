@@ -74,6 +74,29 @@ def test_edinet_parser_handles_utf16_tsv_and_empty_matches(tmp_path: Path) -> No
     assert row["revenue"] is None
 
 
+def test_edinet_parser_prefers_specific_tags_and_scales_jpy_units(tmp_path: Path) -> None:
+    zip_path = tmp_path / "csv.zip"
+    _write_zip(
+        zip_path,
+        "\n".join(
+            [
+                "element,label,contextRef,unit,value",
+                "jpcrp_cor:Assets,Assets,CurrentYearInstant,JPY,153600000000",
+                "jpcrp_cor:CurrentAssets,Current assets,CurrentYearInstant,JPY,26700000000",
+                "jpcrp_cor:Assets,Assets,PriorYearInstant,JPY,149200000000",
+                "ifrs-full:RevenueFromContractsWithCustomers,Revenue,CurrentYearDuration,JPY,43291000000",
+            ]
+        ),
+    )
+
+    facts = extract_financial_facts_from_zip(zip_path)
+    row = facts_to_financial_row(ticker="3543", fiscal_year=2024, facts=facts)
+
+    assert row["total_assets"] == 153600
+    assert row["current_assets"] == 26700
+    assert row["revenue"] == 43291
+
+
 def test_save_and_load_extracted_edinet_facts(tmp_path: Path) -> None:
     db_path = tmp_path / "edinet.sqlite"
     facts = [

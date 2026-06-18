@@ -7,7 +7,13 @@ import requests
 from src.config_loader import PROJECT_ROOT
 from src.edinet_client import EdinetApiError, EdinetClient, extract_document_rows
 from src.edinet_files import save_raw_document
-from src.edinet_lookup import fetch_document_rows_for_tickers, filter_rows_for_tickers, sec_code_candidates
+from src.edinet_lookup import (
+    fetch_document_rows_for_tickers,
+    fetch_document_rows_in_period,
+    filter_document_rows,
+    filter_rows_for_tickers,
+    sec_code_candidates,
+)
 from src.edinet_repository import filter_filings, load_filings, save_filings
 
 
@@ -241,3 +247,42 @@ def test_fetch_document_rows_for_tickers_with_fake_client():
     assert len(rows) == 2
     assert rows[0]["sec_code"] == "35430"
     assert rows[0]["fetched_date"] == "2026-06-18"
+
+
+def test_fetch_document_rows_in_period_collects_directory_candidates():
+    class FakeClient:
+        def fetch_documents(self, target_date, doc_type):
+            return {
+                "results": [
+                    {
+                        "docID": f"S100{target_date.strftime('%d')}",
+                        "edinetCode": "E99999",
+                        "secCode": "99990",
+                        "filerName": "Directory Candidate",
+                        "docDescription": "有価証券報告書",
+                        "submitDateTime": f"{target_date.isoformat()} 10:00",
+                        "csvFlag": "1",
+                    },
+                    {
+                        "docID": f"SKIP{target_date.strftime('%d')}",
+                        "edinetCode": "E00000",
+                        "secCode": "00000",
+                        "filerName": "Skip",
+                        "docDescription": "臨時報告書",
+                        "submitDateTime": f"{target_date.isoformat()} 11:00",
+                        "csvFlag": "0",
+                    },
+                ]
+            }
+
+    rows = fetch_document_rows_in_period(
+        FakeClient(),
+        end_date=date(2026, 6, 18),
+        lookback_days=2,
+        annual_only=True,
+        csv_only=True,
+    )
+
+    assert [row["doc_id"] for row in rows] == ["S10018", "S10017"]
+    assert rows[0]["fetched_date"] == "2026-06-18"
+    assert filter_document_rows(rows, annual_only=True, csv_only=True) == rows

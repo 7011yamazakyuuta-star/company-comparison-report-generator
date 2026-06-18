@@ -28,7 +28,8 @@ def test_llm_prompt_contains_report_inputs_and_avoids_banned_advice_terms():
     assert "高度アルゴリズム: 営業利益ブリッジ" in prompt
     assert "高度アルゴリズム: 経営分析論点" in prompt
     assert "データソースとEDINET反映状況" in prompt
-    assert "EDINET CSV/XBRLを財務数値へ正規化して再計算する処理は未反映" in prompt
+    assert "EDINET CSV/XBRLから抽出できた財務数値" in prompt
+    assert "データソース監査表" in prompt
     assert "推定不可" in prompt
     assert "投資すべき" not in prompt
 

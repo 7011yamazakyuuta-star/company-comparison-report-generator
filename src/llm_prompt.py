@@ -201,7 +201,7 @@ def build_llm_report_prompt(
 ## データソースとEDINET反映状況
 - 財務指標の数値: 現時点ではサンプルCSV、手入力KPI、マーケットデータCSVから計算しています。
 - EDINET連携: {edinet_status}
-- 注意: EDINET CSV/XBRLを財務数値へ正規化して再計算する処理は未反映です。EDINET取得済み書類は、出典候補、提出書類確認、今後の数値更新候補として扱ってください。
+- 注意: EDINET CSV/XBRLから抽出できた財務数値は、データソース監査表で出典・欠損状況を確認しながら使ってください。欠損が多い場合はサンプルCSVや注記と照合してください。
 
 ## EDINET取得済み書類メタデータ
 {_markdown_table(edinet_context, PROMPT_EDINET_COLUMNS)}

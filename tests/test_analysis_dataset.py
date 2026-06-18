@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import pandas as pd
 
-from src.analysis_dataset import DATA_SOURCE_EDINET_OVERLAY, DATA_SOURCE_SAMPLE, prepare_analysis_dataset
+from src.analysis_dataset import (
+    DATA_SOURCE_EDINET_OVERLAY,
+    DATA_SOURCE_SAMPLE,
+    build_data_source_audit,
+    prepare_analysis_dataset,
+)
 from src.data_loader import Dataset
 
 
@@ -101,3 +106,32 @@ def test_prepare_analysis_dataset_overlays_matching_edinet_candidate() -> None:
     assert komeda["operating_income"] == 8932
     assert doutor["revenue"] == 300
     assert set(prepared.source_summary["data_source"]) == {"sample_csv", "edinet_candidate"}
+
+
+def test_build_data_source_audit_marks_partial_edinet_rows() -> None:
+    summary = pd.DataFrame(
+        [
+            {
+                "ticker": "3543",
+                "fiscal_year": 2024,
+                "data_source": "edinet_candidate",
+                "doc_id": "S100TEST",
+                "available_metrics": 3,
+                "missing_metrics": 10,
+            },
+            {
+                "ticker": "3087",
+                "fiscal_year": 2024,
+                "data_source": "sample_csv",
+                "doc_id": "",
+                "available_metrics": 13,
+                "missing_metrics": 0,
+            },
+        ]
+    )
+
+    audit = build_data_source_audit(summary)
+
+    assert audit.loc[0, "status"] == "partial"
+    assert audit.loc[0, "coverage_rate"] == 3 / 13
+    assert audit.loc[1, "status"] == "sample"

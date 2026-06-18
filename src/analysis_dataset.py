@@ -69,6 +69,53 @@ def _summarize_rows(rows: pd.DataFrame, *, source: str) -> pd.DataFrame:
     return pd.DataFrame(summary_rows)
 
 
+def build_data_source_audit(source_summary: pd.DataFrame) -> pd.DataFrame:
+    if source_summary.empty:
+        return pd.DataFrame(
+            columns=[
+                "ticker",
+                "fiscal_year",
+                "data_source",
+                "doc_id",
+                "coverage_rate",
+                "status",
+                "note",
+            ]
+        )
+    rows = []
+    for row in source_summary.itertuples(index=False):
+        row_series = pd.Series(row, index=source_summary.columns)
+        available = int(row_series.get("available_metrics", 0) or 0)
+        missing = int(row_series.get("missing_metrics", 0) or 0)
+        total = available + missing
+        coverage = available / total if total else 0
+        source = str(row_series.get("data_source", ""))
+        if source == "sample_csv":
+            status = "sample"
+            note = "サンプルCSV由来です。課題MVPの基準データとして使います。"
+        elif available == 0:
+            status = "not_ready"
+            note = "EDINET候補ですが、主要財務項目をまだ抽出できていません。"
+        elif missing > 0:
+            status = "partial"
+            note = "EDINET候補です。一部欠損があるため、レポート反映前に確認が必要です。"
+        else:
+            status = "ready"
+            note = "EDINET候補です。主要財務項目がそろっています。"
+        rows.append(
+            {
+                "ticker": str(row_series.get("ticker", "")),
+                "fiscal_year": row_series.get("fiscal_year"),
+                "data_source": source,
+                "doc_id": str(row_series.get("doc_id", "")),
+                "coverage_rate": coverage,
+                "status": status,
+                "note": note,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _align_edinet_rows(edinet_rows: pd.DataFrame, base_columns: list[str]) -> pd.DataFrame:
     if edinet_rows.empty:
         return pd.DataFrame(columns=base_columns)

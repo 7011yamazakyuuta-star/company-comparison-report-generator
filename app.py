@@ -17,6 +17,7 @@ from src.analysis_dataset import (
     DATA_SOURCE_EDINET_OVERLAY,
     DATA_SOURCE_SAMPLE,
     PreparedAnalysisDataset,
+    build_data_source_audit,
     prepare_analysis_dataset,
 )
 from src.assignment_filters import check_assignment_conditions
@@ -2465,6 +2466,25 @@ def _render_analysis_data_source_panel(prepared: PreparedAnalysisDataset) -> Non
         st.info("同じ証券コード・年度のEDINET候補がある場合だけ、サンプルCSVより優先します。欠損値はレポート上で注記対象です。")
 
     if not prepared.source_summary.empty:
+        audit_table = build_data_source_audit(prepared.source_summary)
+        if not audit_table.empty:
+            st.markdown("**データ監査**")
+            st.dataframe(
+                audit_table.rename(
+                    columns={
+                        "ticker": "証券コード",
+                        "fiscal_year": "年度",
+                        "data_source": "データソース",
+                        "doc_id": "docID",
+                        "coverage_rate": "主要項目カバー率",
+                        "status": "状態",
+                        "note": "確認メモ",
+                    }
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+        st.markdown("**データソース詳細**")
         st.dataframe(
             prepared.source_summary.rename(
                 columns={

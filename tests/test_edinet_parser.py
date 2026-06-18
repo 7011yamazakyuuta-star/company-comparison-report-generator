@@ -5,7 +5,14 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.edinet_parser import extract_financial_facts_from_zip, facts_to_financial_row, list_csv_members, summarize_facts
+from src.edinet_parser import (
+    EdinetCsvFact,
+    extract_financial_facts_from_zip,
+    facts_to_financial_row,
+    list_csv_members,
+    summarize_facts,
+)
+from src.edinet_repository import load_edinet_financial_rows, load_extracted_facts, save_extracted_facts
 
 
 def _write_zip(path: Path, content: str, *, member_name: str = "XBRL_TO_CSV/sample.csv", encoding: str = "utf-8-sig") -> None:
@@ -65,3 +72,43 @@ def test_edinet_parser_handles_utf16_tsv_and_empty_matches(tmp_path: Path) -> No
     assert summary["metric"].tolist() == ["cash_flow_operating"]
     assert row["cash_flow_operating"] == 9200
     assert row["revenue"] is None
+
+
+def test_save_and_load_extracted_edinet_facts(tmp_path: Path) -> None:
+    db_path = tmp_path / "edinet.sqlite"
+    facts = [
+        EdinetCsvFact(
+            source_file="sample.csv",
+            metric="revenue",
+            raw_key="jpcrp_cor:NetSales",
+            label="売上高",
+            context="CurrentYearDuration",
+            value=43291,
+        ),
+        EdinetCsvFact(
+            source_file="sample.csv",
+            metric="operating_income",
+            raw_key="jpcrp_cor:OperatingIncome",
+            label="営業利益",
+            context="CurrentYearDuration",
+            value=8932,
+        ),
+    ]
+
+    saved_count = save_extracted_facts(
+        doc_id="S100TEST",
+        ticker="3543",
+        fiscal_year=2024,
+        facts=facts,
+        db_path=db_path,
+    )
+    loaded_facts = load_extracted_facts(db_path=db_path, doc_id="S100TEST")
+    loaded_rows = load_edinet_financial_rows(db_path=db_path, tickers=["3543"])
+
+    assert saved_count == 2
+    assert loaded_facts["metric"].tolist() == ["operating_income", "revenue"]
+    assert loaded_rows.loc[0, "doc_id"] == "S100TEST"
+    assert loaded_rows.loc[0, "ticker"] == "3543"
+    assert loaded_rows.loc[0, "fiscal_year"] == 2024
+    assert loaded_rows.loc[0, "revenue"] == 43291
+    assert loaded_rows.loc[0, "operating_income"] == 8932

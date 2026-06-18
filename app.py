@@ -22,7 +22,14 @@ from src.edinet_client import EdinetApiError, EdinetClient, extract_document_row
 from src.edinet_files import save_raw_document
 from src.edinet_lookup import fetch_document_rows_for_tickers, sec_code_candidates
 from src.edinet_parser import extract_financial_facts_from_zip, facts_to_financial_row, summarize_facts
-from src.edinet_repository import filter_filings, load_filings, save_filings
+from src.edinet_repository import (
+    filter_filings,
+    load_edinet_financial_rows,
+    load_extracted_facts,
+    load_filings,
+    save_extracted_facts,
+    save_filings,
+)
 from src.llm_prompt import build_llm_report_prompt
 from src.metrics.financial import compute_financial_metrics
 from src.metrics.scoring import SCORE_LABELS, build_company_scores
@@ -3102,6 +3109,18 @@ def _render_edinet_panel(selected_companies: pd.DataFrame | None = None) -> None
                     st.rerun()
             if len(options) > len(visible_options):
                 st.caption(f"{len(options)}件中{len(visible_options)}件を表示しています。検索欄で絞り込めます。")
+            saved_facts = load_extracted_facts(doc_id=selected_doc_id)
+            if not saved_facts.empty:
+                st.markdown("**保存済みのCSV解析結果**")
+                st.caption(f"{len(saved_facts)}件の主要財務タグ候補がSQLiteに保存されています。")
+                st.dataframe(saved_facts.head(12), use_container_width=True, hide_index=True)
+                saved_rows = load_edinet_financial_rows(
+                    tickers=saved_facts["ticker"].dropna().astype(str).unique().tolist()
+                )
+                saved_rows = saved_rows[saved_rows["doc_id"].astype(str) == selected_doc_id]
+                if not saved_rows.empty:
+                    st.markdown("**保存済みの分析用データ候補**")
+                    st.dataframe(saved_rows.head(5), use_container_width=True, hide_index=True)
             if st.button("この書類のCSVを取得", disabled=not client.has_api_key):
                 with st.spinner("書類CSVを取得しています..."):
                     try:
@@ -3114,12 +3133,29 @@ def _render_edinet_panel(selected_companies: pd.DataFrame | None = None) -> None
                         st.error(f"予期しないエラーです: {exc}")
                         return
                 st.success(f"保存しました: {saved_path}")
-                facts = extract_financial_facts_from_zip(saved_path)
+                try:
+                    facts = extract_financial_facts_from_zip(saved_path)
+                except Exception:
+                    facts = []
                 if facts:
-                    st.caption("CSV ZIPから主要財務タグ候補を抽出しました。現時点では確認用で、レポート計算への自動反映は次の段階です。")
-                    st.dataframe(summarize_facts(facts).head(30), use_container_width=True, hide_index=True)
-                    ticker_for_preview = str(filtered_filings.loc[filtered_filings["doc_id"].astype(str) == selected_doc_id, "sec_code"].iloc[0])[:4]
+                    doc_row = filtered_filings[filtered_filings["doc_id"].astype(str) == selected_doc_id].head(1)
+                    ticker_for_preview = (
+                        str(doc_row["sec_code"].iloc[0])[:4]
+                        if not doc_row.empty and "sec_code" in doc_row.columns
+                        else ""
+                    )
                     fiscal_year = target_date.year
+                    saved_count = save_extracted_facts(
+                        doc_id=selected_doc_id,
+                        ticker=ticker_for_preview,
+                        fiscal_year=fiscal_year,
+                        facts=facts,
+                    )
+                    st.caption(
+                        f"CSV ZIPから主要財務タグ候補を抽出し、SQLiteに{saved_count}件保存しました。"
+                        "現時点では確認用で、レポート計算への自動反映は次の段階です。"
+                    )
+                    st.dataframe(summarize_facts(facts).head(30), use_container_width=True, hide_index=True)
                     normalized_preview = facts_to_financial_row(
                         ticker=ticker_for_preview,
                         fiscal_year=fiscal_year,

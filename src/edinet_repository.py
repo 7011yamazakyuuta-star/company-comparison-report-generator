@@ -8,6 +8,7 @@ from typing import Any
 import pandas as pd
 
 from .data_loader import DEFAULT_DB_PATH
+from .edinet_parser import EdinetCsvFact, FINANCIAL_TAG_ALIASES, facts_to_financial_row
 
 
 FILINGS_COLUMNS = [
@@ -25,6 +26,8 @@ FILINGS_COLUMNS = [
     "csv_flag",
     "raw_json",
 ]
+
+FINANCIAL_METRIC_COLUMNS = list(FINANCIAL_TAG_ALIASES.keys())
 
 
 def initialize_edinet_tables(db_path: Path = DEFAULT_DB_PATH) -> None:
@@ -46,6 +49,34 @@ def initialize_edinet_tables(db_path: Path = DEFAULT_DB_PATH) -> None:
                 pdf_flag text,
                 csv_flag text,
                 raw_json text
+            )
+            """
+        )
+        conn.execute(
+            """
+            create table if not exists edinet_facts (
+                doc_id text,
+                ticker text,
+                fiscal_year integer,
+                metric text,
+                value real,
+                label text,
+                raw_key text,
+                context text,
+                source_file text,
+                primary key (doc_id, metric, raw_key, context, source_file)
+            )
+            """
+        )
+        metric_columns = ",\n                ".join(f"{metric} real" for metric in FINANCIAL_METRIC_COLUMNS)
+        conn.execute(
+            f"""
+            create table if not exists edinet_financial_rows (
+                doc_id text,
+                ticker text,
+                fiscal_year integer,
+                {metric_columns},
+                primary key (doc_id, ticker, fiscal_year)
             )
             """
         )
@@ -135,3 +166,114 @@ def filter_filings(
             )
             filtered = filtered[mask]
     return filtered.reset_index(drop=True)
+
+
+def save_extracted_facts(
+    *,
+    doc_id: str,
+    ticker: str,
+    fiscal_year: int,
+    facts: list[EdinetCsvFact],
+    db_path: Path = DEFAULT_DB_PATH,
+) -> int:
+    initialize_edinet_tables(db_path)
+    clean_doc_id = str(doc_id).strip()
+    if not clean_doc_id:
+        return 0
+    clean_ticker = str(ticker).strip()
+    year = int(fiscal_year)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("delete from edinet_facts where doc_id = ?", (clean_doc_id,))
+        for fact in facts:
+            conn.execute(
+                """
+                insert or replace into edinet_facts (
+                    doc_id, ticker, fiscal_year, metric, value, label, raw_key, context, source_file
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    clean_doc_id,
+                    clean_ticker,
+                    year,
+                    fact.metric,
+                    fact.value,
+                    fact.label,
+                    fact.raw_key,
+                    fact.context,
+                    fact.source_file,
+                ),
+            )
+
+        row = facts_to_financial_row(ticker=clean_ticker, fiscal_year=year, facts=facts)
+        row_values = {metric: row.get(metric) for metric in FINANCIAL_METRIC_COLUMNS}
+        placeholders = ", ".join("?" for _ in ["doc_id", "ticker", "fiscal_year", *FINANCIAL_METRIC_COLUMNS])
+        metric_column_sql = ", ".join(FINANCIAL_METRIC_COLUMNS)
+        conn.execute(
+            f"""
+            insert or replace into edinet_financial_rows (
+                doc_id, ticker, fiscal_year, {metric_column_sql}
+            ) values ({placeholders})
+            """,
+            (
+                clean_doc_id,
+                clean_ticker,
+                year,
+                *(row_values[metric] for metric in FINANCIAL_METRIC_COLUMNS),
+            ),
+        )
+    return len(facts)
+
+
+def load_extracted_facts(db_path: Path = DEFAULT_DB_PATH, doc_id: str | None = None) -> pd.DataFrame:
+    initialize_edinet_tables(db_path)
+    where = ""
+    params: tuple[str, ...] = ()
+    if doc_id:
+        where = "where doc_id = ?"
+        params = (str(doc_id),)
+    with sqlite3.connect(db_path) as conn:
+        return pd.read_sql_query(
+            f"""
+            select
+                doc_id,
+                ticker,
+                fiscal_year,
+                metric,
+                value,
+                label,
+                raw_key,
+                context,
+                source_file
+            from edinet_facts
+            {where}
+            order by doc_id, metric, source_file
+            """,
+            conn,
+            params=params,
+        )
+
+
+def load_edinet_financial_rows(
+    db_path: Path = DEFAULT_DB_PATH,
+    tickers: list[str] | None = None,
+) -> pd.DataFrame:
+    initialize_edinet_tables(db_path)
+    params: list[str] = []
+    where = ""
+    if tickers:
+        clean_tickers = [str(ticker).strip() for ticker in tickers if str(ticker).strip()]
+        if clean_tickers:
+            placeholders = ", ".join("?" for _ in clean_tickers)
+            where = f"where ticker in ({placeholders})"
+            params = clean_tickers
+    with sqlite3.connect(db_path) as conn:
+        return pd.read_sql_query(
+            f"""
+            select *
+            from edinet_financial_rows
+            {where}
+            order by ticker, fiscal_year desc, doc_id desc
+            """,
+            conn,
+            params=params,
+        )

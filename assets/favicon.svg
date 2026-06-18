@@ -15,10 +15,10 @@
   </defs>
   <rect x="6" y="6" width="52" height="52" rx="15" fill="url(#glass)" filter="url(#shadow)"/>
   <rect x="7.5" y="7.5" width="49" height="49" rx="13.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.88" stroke-width="3"/>
-  <path d="M20 18.5h18.5L46 26v19.5A4.5 4.5 0 0 1 41.5 50h-23A4.5 4.5 0 0 1 14 45.5v-22A5 5 0 0 1 19 18.5h1Z" fill="#FFFFFF" fill-opacity="0.78"/>
-  <path d="M38.5 18.5V25a1.5 1.5 0 0 0 1.5 1.5h6" fill="none" stroke="#7EBEFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
-  <rect x="21" y="37" width="5.6" height="8.5" rx="2.2" fill="url(#blue)"/>
-  <rect x="29.2" y="30" width="5.6" height="15.5" rx="2.2" fill="url(#blue)"/>
-  <rect x="37.4" y="24" width="5.6" height="21.5" rx="2.2" fill="url(#blue)"/>
-  <path d="M19.5 27.5h13M19.5 32h7.2" stroke="#8A94A3" stroke-width="2.2" stroke-linecap="round"/>
+  <path d="M22 18.5h18.5L48 26v19.5A4.5 4.5 0 0 1 43.5 50h-23A4.5 4.5 0 0 1 16 45.5v-22A5 5 0 0 1 21 18.5h1Z" fill="#FFFFFF" fill-opacity="0.78"/>
+  <path d="M40.5 18.5V25a1.5 1.5 0 0 0 1.5 1.5h6" fill="none" stroke="#7EBEFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="23" y="37" width="5.6" height="8.5" rx="2.2" fill="url(#blue)"/>
+  <rect x="31.2" y="30" width="5.6" height="15.5" rx="2.2" fill="url(#blue)"/>
+  <rect x="39.4" y="24" width="5.6" height="21.5" rx="2.2" fill="url(#blue)"/>
+  <path d="M21.5 27.5h13M21.5 32h7.2" stroke="#8A94A3" stroke-width="2.2" stroke-linecap="round"/>
 </svg>

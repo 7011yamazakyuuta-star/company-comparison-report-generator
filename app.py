@@ -265,10 +265,18 @@ def _apply_style() -> None:
             box-shadow: none !important;
             overflow-x: hidden !important;
         }
+        section[data-testid="stSidebar"],
+        div[data-testid="stSidebar"],
+        section[data-testid="stSidebar"] > div,
+        div[data-testid="stSidebar"] > div {
+            max-width: min(24rem, 96vw) !important;
+            overflow-x: hidden !important;
+        }
         section[data-testid="stSidebar"] *,
         div[data-testid="stSidebar"] * {
             box-sizing: border-box;
             max-width: 100%;
+            min-width: 0;
         }
         section[data-testid="stSidebar"] .element-container,
         div[data-testid="stSidebar"] .element-container,
@@ -294,8 +302,12 @@ def _apply_style() -> None:
         }
         section[data-testid="stSidebar"] .stButton > button p,
         div[data-testid="stSidebar"] .stButton > button p,
+        section[data-testid="stSidebar"] .stButton > button span,
+        div[data-testid="stSidebar"] .stButton > button span,
         section[data-testid="stSidebar"] .stDownloadButton > button p,
-        div[data-testid="stSidebar"] .stDownloadButton > button p {
+        div[data-testid="stSidebar"] .stDownloadButton > button p,
+        section[data-testid="stSidebar"] .stDownloadButton > button span,
+        div[data-testid="stSidebar"] .stDownloadButton > button span {
             white-space: normal !important;
             overflow-wrap: anywhere !important;
             word-break: break-word !important;
@@ -3362,9 +3374,9 @@ def _render_sidebar_launcher(workflow_mode: str) -> None:
         const shouldOpen = {str(should_open).lower()};
 
         function getLauncher() {{
-          let launcher = doc.getElementById('company-report-sidebar-launcher');
-          if (launcher) return launcher;
-          launcher = doc.createElement('button');
+          const existing = doc.getElementById('company-report-sidebar-launcher');
+          if (existing) existing.remove();
+          const launcher = doc.createElement('button');
           launcher.id = 'company-report-sidebar-launcher';
           launcher.type = 'button';
           launcher.setAttribute('aria-label', '詳細設定を開く');
@@ -3402,10 +3414,17 @@ def _render_sidebar_launcher(workflow_mode: str) -> None:
           return launcher;
         }}
 
+        function getSidebar() {{
+          const sidebars = Array.from(doc.querySelectorAll('[data-testid="stSidebar"]'));
+          return sidebars.find((sidebar) => sidebar.getBoundingClientRect().width > 0) || sidebars[0] || null;
+        }}
+
         function sidebarLooksOpen() {{
-          const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
+          const sidebar = getSidebar();
           if (!sidebar) return false;
-          return sidebar.getBoundingClientRect().width > 120;
+          const rect = sidebar.getBoundingClientRect();
+          const style = window.parent.getComputedStyle(sidebar);
+          return rect.width > 120 && style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
         }}
 
         function visible(el) {{
@@ -3432,6 +3451,8 @@ def _render_sidebar_launcher(workflow_mode: str) -> None:
             '[data-testid="stSidebarCollapsedControl"]',
             '[data-testid*="SidebarCollapsed"] button',
             '[data-testid*="SidebarCollapsed"]',
+            '[data-testid*="sidebar"] button',
+            '[data-testid*="Sidebar"] button',
             'button[aria-label="Open sidebar"]',
             'button[aria-label="Expand sidebar"]',
             'button[title="Open sidebar"]',
@@ -3446,11 +3467,21 @@ def _render_sidebar_launcher(workflow_mode: str) -> None:
           }}
           const buttons = Array.from(doc.querySelectorAll('button'));
           const button = buttons.find((candidate) => {{
-            const label = `${{candidate.getAttribute('aria-label') || ''}} ${{candidate.getAttribute('title') || ''}} ${{candidate.textContent || ''}}`.toLowerCase();
+            if (candidate.id === 'company-report-sidebar-launcher') return false;
+            const label = `${{candidate.getAttribute('aria-label') || ''}} ${{candidate.getAttribute('title') || ''}} ${{candidate.textContent || ''}} ${{candidate.innerHTML || ''}}`.toLowerCase();
+            const rect = candidate.getBoundingClientRect();
+            const looksLikeTopLeftControl = rect.left < 120 && rect.top < 140 && rect.width <= 90 && rect.height <= 90;
             return visible(candidate) && (
               (label.includes('sidebar') && (label.includes('open') || label.includes('expand'))) ||
               label.includes('サイドバー') ||
-              label.includes('詳細設定')
+              label.includes('詳細設定') ||
+              label.includes('keyboard_double_arrow_right') ||
+              label.includes('keyboard_arrow_right') ||
+              label.includes('chevron_right') ||
+              label.includes('arrow_forward') ||
+              label.includes('»') ||
+              label.includes('›') ||
+              looksLikeTopLeftControl
             );
           }});
           if (button) {{

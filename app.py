@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from contextlib import nullcontext
 from io import BytesIO
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -224,9 +225,9 @@ def _apply_style() -> None:
             font-weight: 620;
             text-shadow: none !important;
         }
-        body:has(.workflow-mode-auto) [data-testid="stSidebar"],
-        body:has(.workflow-mode-auto) [data-testid="stSidebarContent"],
-        body:has(.workflow-mode-auto) [data-testid="stSidebarUserContent"] {
+        [data-testid="stSidebar"],
+        [data-testid="stSidebarContent"],
+        [data-testid="stSidebarUserContent"] {
             display: none !important;
             visibility: hidden !important;
             width: 0 !important;
@@ -236,16 +237,53 @@ def _apply_style() -> None:
             border: 0 !important;
             box-shadow: none !important;
         }
-        body:has(.workflow-mode-auto) [data-testid="stSidebarCollapsedControl"],
-        body:has(.workflow-mode-auto) [data-testid="stSidebarCollapseButton"],
-        body:has(.workflow-mode-auto) [data-testid*="SidebarCollapsed"],
-        body:has(.workflow-mode-auto) [data-testid*="SidebarCollapse"] {
+        [data-testid="stSidebarCollapsedControl"],
+        [data-testid="stSidebarCollapseButton"],
+        [data-testid*="SidebarCollapsed"],
+        [data-testid*="SidebarCollapse"] {
             display: none !important;
             visibility: hidden !important;
         }
-        body:has(.workflow-mode-auto) [data-testid="stMain"],
-        body:has(.workflow-mode-auto) section.main {
+        [data-testid="stMain"],
+        section.main {
             margin-left: 0 !important;
+        }
+        .detail-settings-panel {
+            position: sticky;
+            top: 0.85rem;
+            padding: 1rem;
+            border-radius: 26px;
+            border: 1px solid rgba(255, 255, 255, 0.86);
+            background:
+                linear-gradient(145deg, rgba(255, 255, 255, 0.86), rgba(245, 245, 247, 0.68));
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.95),
+                0 22px 50px rgba(0, 0, 0, 0.08);
+            overflow-x: hidden;
+        }
+        .detail-settings-panel,
+        .detail-settings-panel * {
+            box-sizing: border-box;
+            max-width: 100%;
+            min-width: 0;
+        }
+        .detail-settings-panel .stButton > button,
+        .detail-settings-panel .stDownloadButton > button {
+            width: 100%;
+            white-space: normal !important;
+            overflow-wrap: anywhere !important;
+            word-break: break-word !important;
+        }
+        .detail-settings-panel .stButton > button p,
+        .detail-settings-panel .stButton > button span {
+            white-space: normal !important;
+            overflow-wrap: anywhere !important;
+            word-break: break-word !important;
+        }
+        @media (max-width: 900px) {
+            .detail-settings-panel {
+                position: static;
+            }
         }
         div[data-testid="stSidebar"] {
             background: var(--app-surface-soft);
@@ -3995,11 +4033,7 @@ def main() -> None:
         f'<div class="workflow-mode-marker workflow-mode-{workflow_marker}"></div>',
         unsafe_allow_html=True,
     )
-    previous_workflow_mode = st.session_state.get("_last_workflow_mode")
-    if workflow_mode == "detail" and previous_workflow_mode != "detail":
-        st.session_state.request_open_settings_sidebar = True
-    st.session_state._last_workflow_mode = workflow_mode
-    _render_sidebar_launcher(str(workflow_mode))
+    detail_main_context = nullcontext()
 
     preset_id = st.session_state.selected_preset_id
     preset = presets[preset_id]
@@ -4009,7 +4043,11 @@ def main() -> None:
     selected_tickers = list(preset["companies"])
 
     if workflow_mode == "detail":
-        with st.sidebar:
+        detail_settings_col, detail_main_col = st.columns([0.31, 0.69], gap="large")
+        detail_main_context = detail_main_col
+        with detail_settings_col:
+            settings_box = st.container(border=True)
+        with settings_box:
             st.header("比較設定")
             st.caption("プリセットで始めるか、証券コード・企業名・業種から手動で選びます。")
             st.markdown("**企業選択**")
@@ -4112,189 +4150,190 @@ def main() -> None:
         )
         return
 
-    _render_workspace_summary(
-        preset_id=preset_id,
-        preset=preset,
-        selected_companies=selected_companies,
-        app_mode=app_mode,
-        industry_mode=industry_mode,
-        industry_policy=industry_policy,
-        warnings=warning_list,
-        available_company_count=int(dataset.company_master["ticker"].astype(str).nunique()),
-    )
-
-    detail_section = _render_detail_section_nav()
-
-    if detail_section == "compare":
-        _render_section_intro(
-            "Company set",
-            "比較する企業",
-            "企業の上場日、JPX業種、広義セクター、事業テーマを確認します。",
-        )
-        st.write(preset.get("description", ""))
-        for note in preset.get("notes", []):
-            st.info(note)
-        st.dataframe(
-            selected_companies[
-                ["ticker", "company_name", "jpx_industry", "broad_sector", "business_theme", "listing_date", "listing_note"]
-            ].rename(
-                columns={
-                    "ticker": "証券コード",
-                    "company_name": "企業名",
-                    "jpx_industry": "JPX業種",
-                    "broad_sector": "広義セクター",
-                    "business_theme": "事業テーマ",
-                    "listing_date": "上場日",
-                    "listing_note": "注記",
-                }
-            ),
-            use_container_width=True,
-            hide_index=True,
+    with detail_main_context:
+        _render_workspace_summary(
+            preset_id=preset_id,
+            preset=preset,
+            selected_companies=selected_companies,
+            app_mode=app_mode,
+            industry_mode=industry_mode,
+            industry_policy=industry_policy,
+            warnings=warning_list,
+            available_company_count=int(dataset.company_master["ticker"].astype(str).nunique()),
         )
 
-    elif detail_section == "checks":
-        _render_section_intro(
-            "Assignment check",
-            "課題条件の確認",
-            "大学課題モードでは、上場日、上場後年数、業種一致、除外業種をYAMLの条件に沿って確認します。",
-        )
-        _show_condition_warnings(warning_list)
-        st.dataframe(preview["condition_table"], use_container_width=True, hide_index=True)
-        st.subheader("企業別の上場条件")
-        st.dataframe(preview["company_check_table"], use_container_width=True, hide_index=True)
+        detail_section = _render_detail_section_nav()
 
-    elif detail_section == "report":
-        _render_section_intro(
-            "Report",
-            "Wordレポートを生成",
-            "表、グラフ、警告、欠損注記、参考資料をまとめた日本語Wordファイルを作成します。",
-        )
-        disabled = len(selected_tickers) < int(rubric["assignment"]["min_companies"])
-        _render_analysis_data_source_panel(prepared_analysis)
-        if not disabled:
-            report_metrics_preview = _compute_metrics_for_selection(analysis_dataset, selected_tickers)
-            _render_plus_alpha_preview(
-                report_metrics_preview,
-                selected_companies,
-                str(rubric["assignment"]["missing_value_label"]),
-                app_mode=app_mode,
-                industry_mode=industry_mode,
+        if detail_section == "compare":
+            _render_section_intro(
+                "Company set",
+                "比較する企業",
+                "企業の上場日、JPX業種、広義セクター、事業テーマを確認します。",
+            )
+            st.write(preset.get("description", ""))
+            for note in preset.get("notes", []):
+                st.info(note)
+            st.dataframe(
+                selected_companies[
+                    ["ticker", "company_name", "jpx_industry", "broad_sector", "business_theme", "listing_date", "listing_note"]
+                ].rename(
+                    columns={
+                        "ticker": "証券コード",
+                        "company_name": "企業名",
+                        "jpx_industry": "JPX業種",
+                        "broad_sector": "広義セクター",
+                        "business_theme": "事業テーマ",
+                        "listing_date": "上場日",
+                        "listing_note": "注記",
+                    }
+                ),
+                use_container_width=True,
+                hide_index=True,
             )
 
-        generate_clicked = st.button("Wordレポートを生成", type="primary", disabled=disabled, width="stretch", key="detail_generate_report")
-        report_status = st.empty()
-        if generate_clicked:
-            with report_status.container():
-                with st.spinner("EDINETを確認し、Wordレポートを作成しています..."):
-                    preflight, report_prepared = _prepare_edinet_analysis_for_selection(dataset, selected_tickers)
-                    package = build_report_package(
-                        selected_tickers=selected_tickers,
-                        preset={**preset, "preset_id": preset_id},
-                        app_mode=app_mode,
-                        industry_mode=industry_mode,
-                        dataset=report_prepared.dataset,
-                        as_of=date.today(),
-                        edinet_filings=preflight.filings,
-                    )
-                st.success(f"生成しました: {package.docx_path.name}")
-                _render_report_edinet_status(preflight, selected_tickers)
+        elif detail_section == "checks":
+            _render_section_intro(
+                "Assignment check",
+                "課題条件の確認",
+                "大学課題モードでは、上場日、上場後年数、業種一致、除外業種をYAMLの条件に沿って確認します。",
+            )
+            _show_condition_warnings(warning_list)
+            st.dataframe(preview["condition_table"], use_container_width=True, hide_index=True)
+            st.subheader("企業別の上場条件")
+            st.dataframe(preview["company_check_table"], use_container_width=True, hide_index=True)
 
-                with package.docx_path.open("rb") as f:
-                    st.download_button(
-                        "Wordをダウンロード",
-                        data=f.read(),
-                        file_name=package.docx_path.name,
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        width="stretch",
-                        key="detail_download_report",
-                    )
+        elif detail_section == "report":
+            _render_section_intro(
+                "Report",
+                "Wordレポートを生成",
+                "表、グラフ、警告、欠損注記、参考資料をまとめた日本語Wordファイルを作成します。",
+            )
+            disabled = len(selected_tickers) < int(rubric["assignment"]["min_companies"])
+            _render_analysis_data_source_panel(prepared_analysis)
+            if not disabled:
+                report_metrics_preview = _compute_metrics_for_selection(analysis_dataset, selected_tickers)
+                _render_plus_alpha_preview(
+                    report_metrics_preview,
+                    selected_companies,
+                    str(rubric["assignment"]["missing_value_label"]),
+                    app_mode=app_mode,
+                    industry_mode=industry_mode,
+                )
 
-                if package.warnings:
-                    st.subheader("警告")
-                    _show_condition_warnings(package.warnings)
-
-                st.subheader("最新年度の主要指標")
-                st.dataframe(_latest_metric_preview(package.metrics), use_container_width=True, hide_index=True)
-
-                st.subheader("分析品質サマリー")
-                st.dataframe(_score_preview_table(package.quality_scores), use_container_width=True, hide_index=True)
-
-                st.subheader("グラフ")
-                columns = st.columns(2)
-                for idx, (slug, path) in enumerate(package.chart_paths.items()):
-                    with columns[idx % 2]:
-                        st.image(str(path), caption=slug, use_container_width=True)
-
-                if package.missing_notes:
-                    st.subheader("欠損データ注記")
-                    for note in package.missing_notes:
-                        st.write(f"- {note}")
-
-        st.markdown(
-            '<p class="report-note">Word生成はLLMなしの確定出力です。'
-            'プロンプト生成はEDINET確認後の数値・監査情報をClaudeなどへ渡すための草稿依頼です。</p>',
-            unsafe_allow_html=True,
-        )
-        if not disabled:
-            prompt_clicked = st.button("プロンプトを生成", width="stretch", key="detail_generate_prompt")
-            prompt_status = st.empty()
-            if prompt_clicked:
-                with prompt_status.container():
-                    with st.spinner("EDINETを確認し、LLM用プロンプトを作成しています..."):
-                        preflight, prompt_prepared = _prepare_edinet_analysis_for_selection(dataset, selected_tickers)
-                        prompt_file_name, prompt_text = _build_prompt_download(
+            generate_clicked = st.button("Wordレポートを生成", type="primary", disabled=disabled, width="stretch", key="detail_generate_report")
+            report_status = st.empty()
+            if generate_clicked:
+                with report_status.container():
+                    with st.spinner("EDINETを確認し、Wordレポートを作成しています..."):
+                        preflight, report_prepared = _prepare_edinet_analysis_for_selection(dataset, selected_tickers)
+                        package = build_report_package(
                             selected_tickers=selected_tickers,
-                            preset_id=preset_id,
-                            preset=preset,
+                            preset={**preset, "preset_id": preset_id},
                             app_mode=app_mode,
                             industry_mode=industry_mode,
-                            dataset=prompt_prepared.dataset,
-                            data_source_audit=build_data_source_audit(prompt_prepared.source_summary),
+                            dataset=report_prepared.dataset,
+                            as_of=date.today(),
+                            edinet_filings=preflight.filings,
                         )
-                    st.session_state.detail_prompt_bundle = {
-                        "signature": f"{preset_id}:{app_mode}:{industry_mode}:{','.join(selected_tickers)}",
-                        "file_name": prompt_file_name,
-                        "text": prompt_text,
-                    }
-            prompt_bundle = st.session_state.get("detail_prompt_bundle")
-            prompt_signature = f"{preset_id}:{app_mode}:{industry_mode}:{','.join(selected_tickers)}"
-            if prompt_bundle and prompt_bundle.get("signature") == prompt_signature:
-                _render_llm_prompt_panel(
-                    file_name=str(prompt_bundle["file_name"]),
-                    prompt_text=str(prompt_bundle["text"]),
-                    key_prefix="detail",
-                )
+                    st.success(f"生成しました: {package.docx_path.name}")
+                    _render_report_edinet_status(preflight, selected_tickers)
 
-            export_clicked = st.button("EDINET取得データをZIPで準備", width="stretch", key="detail_prepare_edinet_export")
-            export_status = st.empty()
-            if export_clicked:
-                with export_status.container():
-                    with st.spinner("EDINETを確認し、ダウンロード用ZIPを作成しています..."):
-                        preflight, export_prepared = _prepare_edinet_analysis_for_selection(dataset, selected_tickers)
-                        export_file_name, export_bytes = _build_edinet_export_zip(
-                            selected_tickers=selected_tickers,
-                            selected_companies=selected_companies,
-                            preflight=preflight,
-                            prepared=export_prepared,
+                    with package.docx_path.open("rb") as f:
+                        st.download_button(
+                            "Wordをダウンロード",
+                            data=f.read(),
+                            file_name=package.docx_path.name,
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            width="stretch",
+                            key="detail_download_report",
                         )
-                    st.session_state.detail_edinet_export_bundle = {
-                        "signature": prompt_signature,
-                        "file_name": export_file_name,
-                        "bytes": export_bytes,
-                    }
-            export_bundle = st.session_state.get("detail_edinet_export_bundle")
-            if export_bundle and export_bundle.get("signature") == prompt_signature:
-                st.download_button(
-                    "EDINETデータZIPをダウンロード",
-                    data=export_bundle["bytes"],
-                    file_name=str(export_bundle["file_name"]),
-                    mime="application/zip",
-                    width="stretch",
-                    key="detail_download_edinet_export",
-                )
 
-    elif detail_section == "edinet":
-        _render_edinet_panel(selected_companies=selected_companies)
+                    if package.warnings:
+                        st.subheader("警告")
+                        _show_condition_warnings(package.warnings)
+
+                    st.subheader("最新年度の主要指標")
+                    st.dataframe(_latest_metric_preview(package.metrics), use_container_width=True, hide_index=True)
+
+                    st.subheader("分析品質サマリー")
+                    st.dataframe(_score_preview_table(package.quality_scores), use_container_width=True, hide_index=True)
+
+                    st.subheader("グラフ")
+                    columns = st.columns(2)
+                    for idx, (slug, path) in enumerate(package.chart_paths.items()):
+                        with columns[idx % 2]:
+                            st.image(str(path), caption=slug, use_container_width=True)
+
+                    if package.missing_notes:
+                        st.subheader("欠損データ注記")
+                        for note in package.missing_notes:
+                            st.write(f"- {note}")
+
+            st.markdown(
+                '<p class="report-note">Word生成はLLMなしの確定出力です。'
+                'プロンプト生成はEDINET確認後の数値・監査情報をClaudeなどへ渡すための草稿依頼です。</p>',
+                unsafe_allow_html=True,
+            )
+            if not disabled:
+                prompt_clicked = st.button("プロンプトを生成", width="stretch", key="detail_generate_prompt")
+                prompt_status = st.empty()
+                if prompt_clicked:
+                    with prompt_status.container():
+                        with st.spinner("EDINETを確認し、LLM用プロンプトを作成しています..."):
+                            preflight, prompt_prepared = _prepare_edinet_analysis_for_selection(dataset, selected_tickers)
+                            prompt_file_name, prompt_text = _build_prompt_download(
+                                selected_tickers=selected_tickers,
+                                preset_id=preset_id,
+                                preset=preset,
+                                app_mode=app_mode,
+                                industry_mode=industry_mode,
+                                dataset=prompt_prepared.dataset,
+                                data_source_audit=build_data_source_audit(prompt_prepared.source_summary),
+                            )
+                        st.session_state.detail_prompt_bundle = {
+                            "signature": f"{preset_id}:{app_mode}:{industry_mode}:{','.join(selected_tickers)}",
+                            "file_name": prompt_file_name,
+                            "text": prompt_text,
+                        }
+                prompt_bundle = st.session_state.get("detail_prompt_bundle")
+                prompt_signature = f"{preset_id}:{app_mode}:{industry_mode}:{','.join(selected_tickers)}"
+                if prompt_bundle and prompt_bundle.get("signature") == prompt_signature:
+                    _render_llm_prompt_panel(
+                        file_name=str(prompt_bundle["file_name"]),
+                        prompt_text=str(prompt_bundle["text"]),
+                        key_prefix="detail",
+                    )
+
+                export_clicked = st.button("EDINET取得データをZIPで準備", width="stretch", key="detail_prepare_edinet_export")
+                export_status = st.empty()
+                if export_clicked:
+                    with export_status.container():
+                        with st.spinner("EDINETを確認し、ダウンロード用ZIPを作成しています..."):
+                            preflight, export_prepared = _prepare_edinet_analysis_for_selection(dataset, selected_tickers)
+                            export_file_name, export_bytes = _build_edinet_export_zip(
+                                selected_tickers=selected_tickers,
+                                selected_companies=selected_companies,
+                                preflight=preflight,
+                                prepared=export_prepared,
+                            )
+                        st.session_state.detail_edinet_export_bundle = {
+                            "signature": prompt_signature,
+                            "file_name": export_file_name,
+                            "bytes": export_bytes,
+                        }
+                export_bundle = st.session_state.get("detail_edinet_export_bundle")
+                if export_bundle and export_bundle.get("signature") == prompt_signature:
+                    st.download_button(
+                        "EDINETデータZIPをダウンロード",
+                        data=export_bundle["bytes"],
+                        file_name=str(export_bundle["file_name"]),
+                        mime="application/zip",
+                        width="stretch",
+                        key="detail_download_edinet_export",
+                    )
+
+        elif detail_section == "edinet":
+            _render_edinet_panel(selected_companies=selected_companies)
 
 
 if __name__ == "__main__":

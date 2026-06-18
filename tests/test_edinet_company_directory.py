@@ -3,6 +3,8 @@ import pandas as pd
 from src.data_loader import load_sample_dataset
 from src.edinet_company_directory import (
     build_company_directory_from_filings,
+    load_static_edinet_company_directory,
+    merge_company_master_with_edinet_directory,
     merge_company_master_with_edinet_filings,
     overlay_dataset_company_master,
     ticker_from_sec_code,
@@ -77,6 +79,27 @@ def test_merge_company_master_with_edinet_filings_preserves_sample_master():
     assert "7011" in set(merged["ticker"])
     assert merged[merged["ticker"] == "9999"].iloc[0]["company_name"] == "Added Company"
     assert merged[merged["ticker"] == "7011"].iloc[0]["company_name"] != "Should Not Override"
+
+
+def test_load_static_edinet_directory_and_merge(tmp_path):
+    dataset = load_sample_dataset()
+    directory_path = tmp_path / "edinet_company_directory.csv"
+    directory_path.write_text(
+        "\n".join(
+            [
+                "ticker,company_name,edinet_code,jpx_industry,broad_sector,business_theme,listing_date,listing_note,business_summary,source_note",
+                "9999,Static Added,E99999,未分類,EDINET提出企業,EDINET提出企業,,,EDINET追加候補,EDINET code list",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    directory = load_static_edinet_company_directory(directory_path)
+    merged = merge_company_master_with_edinet_directory(dataset.company_master, directory)
+
+    assert directory["ticker"].tolist() == ["9999"]
+    assert "9999" in set(merged["ticker"])
+    assert merged[merged["ticker"] == "9999"].iloc[0]["company_name"] == "Static Added"
 
 
 def test_overlay_dataset_company_master_keeps_financial_frames_unchanged():

@@ -18,6 +18,8 @@
 - EDINETの保存済み一覧を検索し、有価証券報告書のCSV ZIPを1件ずつ取得する
 - 取得したCSV ZIPから主要財務タグ候補を抽出し、SQLiteへ保存して分析用データ候補を確認する
 - 詳細設定では、サンプルCSVを基準にEDINET抽出候補を同一証券コード・年度だけ優先する検証モードを選べる
+- `data/company_master/edinet_company_directory.csv` にEDINET提出者由来の軽量企業候補を同梱する
+- `scripts/build_edinet_company_directory.py` でEDINET企業候補辞書を再生成できる
 - OSやブラウザのダークテーマに左右されにくいライト基調のStreamlit画面で操作する
 
 ## セットアップ
@@ -89,6 +91,13 @@ python -c "from datetime import date, timedelta; from src.edinet_client import E
 ```
 
 取得結果はSQLiteの `edinet_filings` テーブルに保存されます。DBファイルはGitHubに含めません。
+
+企業検索の候補数を広げたい場合は、ローカルで以下を実行するとEDINET提出者メタデータから軽量な企業候補CSVを再生成できます。APIキーは `.env` または環境変数から読みます。
+```powershell
+python scripts\build_edinet_company_directory.py --days 730
+```
+
+このCSVは提出者名・証券コード・EDINETコードの検索補助用です。JPX業種や上場日は未分類の候補もあるため、大学課題モードでは条件表と警告を確認してください。
 書類本体のCSV ZIPもGitHubには含めません。
 
 ## 起動方法

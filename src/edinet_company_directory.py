@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
 
 from .company_master import normalize_ticker_column
+from .config_loader import PROJECT_ROOT
 from .data_loader import Dataset
 
+
+DEFAULT_EDINET_DIRECTORY_PATH = PROJECT_ROOT / "data" / "company_master" / "edinet_company_directory.csv"
 
 COMPANY_MASTER_COLUMNS = [
     "ticker",
@@ -82,9 +86,18 @@ def build_company_directory_from_filings(filings: pd.DataFrame) -> pd.DataFrame:
     return normalize_ticker_column(pd.DataFrame(directory_rows, columns=COMPANY_MASTER_COLUMNS))
 
 
-def merge_company_master_with_edinet_filings(master: pd.DataFrame, filings: pd.DataFrame) -> pd.DataFrame:
+def load_static_edinet_company_directory(path: Path = DEFAULT_EDINET_DIRECTORY_PATH) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame(columns=COMPANY_MASTER_COLUMNS)
+    directory = pd.read_csv(path, dtype={"ticker": str})
+    for column in COMPANY_MASTER_COLUMNS:
+        if column not in directory.columns:
+            directory[column] = ""
+    return normalize_ticker_column(directory[COMPANY_MASTER_COLUMNS])
+
+
+def merge_company_master_with_edinet_directory(master: pd.DataFrame, directory: pd.DataFrame) -> pd.DataFrame:
     base = normalize_ticker_column(master.copy())
-    directory = build_company_directory_from_filings(filings)
     if directory.empty:
         return base
 
@@ -102,5 +115,15 @@ def merge_company_master_with_edinet_filings(master: pd.DataFrame, filings: pd.D
     return normalize_ticker_column(merged)
 
 
+def merge_company_master_with_edinet_filings(master: pd.DataFrame, filings: pd.DataFrame) -> pd.DataFrame:
+    directory = build_company_directory_from_filings(filings)
+    return merge_company_master_with_edinet_directory(master, directory)
+
+
 def overlay_dataset_company_master(dataset: Dataset, filings: pd.DataFrame) -> Dataset:
-    return replace(dataset, company_master=merge_company_master_with_edinet_filings(dataset.company_master, filings))
+    merged = merge_company_master_with_edinet_directory(
+        dataset.company_master,
+        load_static_edinet_company_directory(),
+    )
+    merged = merge_company_master_with_edinet_filings(merged, filings)
+    return replace(dataset, company_master=merged)

@@ -31,7 +31,35 @@ from src.data_loader import DEFAULT_DB_PATH, load_dataset
 from src.edinet_client import EdinetApiError, EdinetClient, extract_document_rows
 from src.edinet_company_directory import overlay_dataset_company_master
 from src.edinet_files import save_raw_document
-from src.edinet_lookup import fetch_document_rows_for_tickers, fetch_document_rows_in_period, sec_code_candidates
+from src.edinet_lookup import fetch_document_rows_for_tickers, sec_code_candidates
+try:
+    from src.edinet_lookup import fetch_document_rows_in_period
+except ImportError:  # pragma: no cover - guards Streamlit Cloud stale module deploys
+    def fetch_document_rows_in_period(
+        client: EdinetClient,
+        *,
+        end_date: date,
+        lookback_days: int = 30,
+        doc_type: int = 2,
+        annual_only: bool = False,
+        csv_only: bool = False,
+    ) -> list[dict]:
+        matched: list[dict] = []
+        seen_doc_ids: set[str] = set()
+        for offset in range(max(1, int(lookback_days))):
+            target_date = end_date - timedelta(days=offset)
+            payload = client.fetch_documents(target_date=target_date, doc_type=doc_type)
+            for row in extract_document_rows(payload):
+                if annual_only and "有価証券報告書" not in str(row.get("doc_description", "")):
+                    continue
+                if csv_only and str(row.get("csv_flag", "")) != "1":
+                    continue
+                doc_id = str(row.get("doc_id", ""))
+                if doc_id in seen_doc_ids:
+                    continue
+                matched.append({**row, "fetched_date": target_date.isoformat()})
+                seen_doc_ids.add(doc_id)
+        return matched
 from src.edinet_parser import extract_financial_facts_from_zip, facts_to_financial_row, summarize_facts
 from src.edinet_repository import (
     filter_filings,
@@ -3353,9 +3381,9 @@ def _render_edinet_panel(selected_companies: pd.DataFrame | None = None) -> None
     )
     directory_days = st.selectbox(
         "辞書更新期間",
-        options=[30, 45, 90, 120],
+        options=[45, 120, 365, 730],
         index=1,
-        format_func=lambda value: f"直近{value}日分",
+        format_func=lambda value: "最大730日分" if value == 730 else f"直近{value}日分",
         key="edinet_directory_lookback_days",
     )
     if st.button(

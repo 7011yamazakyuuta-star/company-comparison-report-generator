@@ -21,6 +21,7 @@ from src.data_loader import DEFAULT_DB_PATH, load_dataset
 from src.edinet_client import EdinetApiError, EdinetClient, extract_document_rows
 from src.edinet_files import save_raw_document
 from src.edinet_lookup import fetch_document_rows_for_tickers, sec_code_candidates
+from src.edinet_parser import extract_financial_facts_from_zip, facts_to_financial_row, summarize_facts
 from src.edinet_repository import filter_filings, load_filings, save_filings
 from src.llm_prompt import build_llm_report_prompt
 from src.metrics.financial import compute_financial_metrics
@@ -2920,7 +2921,7 @@ def _render_edinet_panel(selected_companies: pd.DataFrame | None = None) -> None
     col_c.metric("取得単位", "1日分")
     st.info(
         "現在のレポート計算はサンプルCSVを使います。EDINET連携は、証券コードから書類一覧を検索し、"
-        "CSV ZIPを保存する段階まで対応しています。取得ファイルを財務数値へ正規化する処理は次の拡張対象です。"
+        "CSV ZIPの保存と主要財務タグ候補の抽出まで対応しています。取得値をレポート計算へ自動反映する処理は次の拡張対象です。"
     )
 
     selected_companies = selected_companies if selected_companies is not None else pd.DataFrame()
@@ -3113,11 +3114,33 @@ def _render_edinet_panel(selected_companies: pd.DataFrame | None = None) -> None
                         st.error(f"予期しないエラーです: {exc}")
                         return
                 st.success(f"保存しました: {saved_path}")
-                st.caption("保存したCSV ZIPは今後のXBRL/CSV解析強化で財務データへ自動反映する入口になります。現時点の財務分析はサンプルCSVを使用します。")
+                facts = extract_financial_facts_from_zip(saved_path)
+                if facts:
+                    st.caption("CSV ZIPから主要財務タグ候補を抽出しました。現時点では確認用で、レポート計算への自動反映は次の段階です。")
+                    st.dataframe(summarize_facts(facts).head(30), use_container_width=True, hide_index=True)
+                    ticker_for_preview = str(filtered_filings.loc[filtered_filings["doc_id"].astype(str) == selected_doc_id, "sec_code"].iloc[0])[:4]
+                    fiscal_year = target_date.year
+                    normalized_preview = facts_to_financial_row(
+                        ticker=ticker_for_preview,
+                        fiscal_year=fiscal_year,
+                        facts=facts,
+                    )
+                    st.markdown("**分析用データ候補**")
+                    st.dataframe(pd.DataFrame([normalized_preview]), use_container_width=True, hide_index=True)
+                else:
+                    st.caption(
+                        "保存したCSV ZIPから主要財務タグ候補はまだ抽出できませんでした。"
+                        "タグ揺れやCSV構造に合わせたマッピングを追加していきます。"
+                    )
 
 
 def main() -> None:
-    st.set_page_config(page_title="企業比較レポート", layout="wide", initial_sidebar_state="expanded")
+    st.set_page_config(
+        page_title="企業比較レポート",
+        page_icon="assets/favicon.svg",
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
     _apply_style()
     _consume_home_query()
 

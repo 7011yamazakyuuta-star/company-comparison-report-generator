@@ -12,7 +12,10 @@ import pandas as pd
 from .company_master import company_name_map
 
 
-plt.rcParams["font.family"] = ["Yu Gothic", "Meiryo", "MS Gothic", "DejaVu Sans"]
+try:
+    import japanize_matplotlib  # noqa: F401
+except ImportError:
+    plt.rcParams["font.family"] = ["Yu Gothic", "Meiryo", "MS Gothic", "DejaVu Sans"]
 plt.rcParams["axes.unicode_minus"] = False
 
 
@@ -76,4 +79,3 @@ def create_charts(metrics: pd.DataFrame, master: pd.DataFrame, output_dir: Path)
             percent=percent,
         )
     return paths
-

@@ -2246,6 +2246,40 @@ def _parse_ticker_text(text: str) -> list[str]:
     return list(dict.fromkeys(tickers))
 
 
+def _edinet_lookup_preview_table(rows: list[dict]) -> pd.DataFrame:
+    columns = ["証券コード", "提出者名", "EDINETコード", "書類名", "提出日時", "CSV"]
+    if not rows:
+        return pd.DataFrame(columns=columns)
+
+    frame = pd.DataFrame(rows).drop(columns=["raw_json"], errors="ignore")
+    if frame.empty:
+        return pd.DataFrame(columns=columns)
+
+    def column(name: str) -> pd.Series:
+        if name in frame.columns:
+            return frame[name]
+        return pd.Series([""] * len(frame), index=frame.index)
+
+    sec_code = column("sec_code").astype(str).str.extract(r"(\d{4})", expand=False)
+    display = pd.DataFrame(
+        {
+            "証券コード": sec_code.fillna(column("sec_code")),
+            "提出者名": column("filer_name"),
+            "EDINETコード": column("edinet_code"),
+            "書類名": column("doc_description"),
+            "提出日時": column("submit_datetime"),
+            "CSV": column("csv_flag").astype(str).map({"1": "あり", "0": "なし"}).fillna(column("csv_flag")),
+        }
+    )
+    return display.drop_duplicates().head(8)
+
+
+def _transfer_tickers_to_edinet_tab(tickers: list[str]) -> None:
+    st.session_state["edinet_ticker_lookup"] = " ".join(tickers)
+    st.session_state["detail_section"] = "edinet"
+    st.rerun()
+
+
 def _company_preview_table(company_master: pd.DataFrame, tickers: list[str]) -> pd.DataFrame:
     if not tickers:
         return pd.DataFrame(columns=["証券コード", "企業名", "JPX業種", "テーマ", "EDINETコード"])
@@ -2410,6 +2444,58 @@ def _render_company_search_selector(
     if missing_direct_tickers:
         missing_text = ", ".join(missing_direct_tickers)
         st.warning(f"{missing_text} は登録済み企業マスターに見つかりません。EDINET取得タブでは書類検索を続けられます。")
+        st.caption("その他の企業は、EDINET APIの書類一覧から提出者名とEDINETコードを確認できます。")
+        client = EdinetClient()
+        lookup_rows_key = f"{key_prefix}_edinet_lookup_rows"
+        lookup_tickers_key = f"{key_prefix}_edinet_lookup_tickers"
+        quick_col, detail_col = st.columns(2, gap="small")
+        with quick_col:
+            if st.button(
+                "EDINETで未登録コードを確認",
+                disabled=not client.has_api_key,
+                width="stretch",
+                key=f"{key_prefix}_edinet_quick_lookup",
+            ):
+                with st.spinner("EDINETの書類一覧を確認しています..."):
+                    try:
+                        matched_rows = fetch_document_rows_for_tickers(
+                            client,
+                            missing_direct_tickers,
+                            end_date=date.today(),
+                            lookback_days=120,
+                            doc_type=2,
+                            annual_only=False,
+                            csv_only=False,
+                        )
+                        saved_count = save_filings(matched_rows)
+                        _clear_filings_cache()
+                    except EdinetApiError as exc:
+                        st.error(f"EDINETで確認できませんでした: {exc}")
+                        matched_rows = []
+                    except Exception as exc:  # pragma: no cover - Streamlit safety net
+                        st.error(f"予期しないエラーです: {exc}")
+                        matched_rows = []
+                st.session_state[lookup_rows_key] = matched_rows
+                st.session_state[lookup_tickers_key] = missing_direct_tickers
+                st.session_state["edinet_ticker_lookup"] = missing_text
+                if matched_rows:
+                    st.success(f"EDINETで{len(matched_rows)}件見つかりました。{saved_count}件をSQLiteに保存しました。")
+                else:
+                    st.info("指定期間内のEDINET書類一覧では見つかりませんでした。期間を広げてEDINET取得タブで確認できます。")
+        with detail_col:
+            if st.button(
+                "EDINET取得タブで詳しく探す",
+                width="stretch",
+                key=f"{key_prefix}_edinet_open_tab",
+            ):
+                _transfer_tickers_to_edinet_tab(missing_direct_tickers)
+        if not client.has_api_key:
+            st.info("EDINET_API_KEYをStreamlit Secretsまたは.envに設定すると、未登録コードをAPIで確認できます。")
+
+        prior_rows = st.session_state.get(lookup_rows_key, [])
+        prior_tickers = st.session_state.get(lookup_tickers_key, [])
+        if prior_rows and set(prior_tickers) == set(missing_direct_tickers):
+            st.dataframe(_edinet_lookup_preview_table(prior_rows), use_container_width=True, hide_index=True)
     if filtered.empty:
         st.info("登録済み企業に候補がありません。検索語を短くするか、EDINET取得タブで証券コードから書類を探してください。")
     else:

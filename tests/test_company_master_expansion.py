@@ -53,3 +53,24 @@ def test_sample_directory_has_broader_edinet_enabled_candidates():
     assert {"7203", "7267", "7201"}.issubset(set(auto_candidates["ticker"]))
     assert {"2802", "2801", "2002"}.issubset(set(food_candidates["ticker"]))
     assert {"7011", "7012"}.issubset(set(industry_candidates["ticker"]))
+
+
+def test_edinet_lookup_preview_table_normalizes_sec_code():
+    from app import _edinet_lookup_preview_table
+
+    table = _edinet_lookup_preview_table(
+        [
+            {
+                "sec_code": "99990",
+                "filer_name": "テスト株式会社",
+                "edinet_code": "E99999",
+                "doc_description": "四半期報告書",
+                "submit_datetime": "2026-06-18 10:00",
+                "csv_flag": "1",
+                "raw_json": {"docID": "S100TEST"},
+            }
+        ]
+    )
+
+    assert table.loc[0, "証券コード"] == "9999"
+    assert table.loc[0, "CSV"] == "あり"

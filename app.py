@@ -2304,27 +2304,27 @@ def _render_company_search_selector(
     ]
 
     if compact:
-        st.caption("現段階の企業検索はサンプル企業マスター内が対象です。未登録の証券コードはEDINETタブの書類検索で確認できます。")
+        st.caption("まず登録済み企業から選びます。候補にない場合はEDINET取得タブで証券コードから書類を探せます。")
         direct_text = st.text_input(
             "証券コードを直接入力",
-            placeholder="例: 3543, 3087",
+            placeholder="例: 3543, 3087, 7011",
             key=f"{key_prefix}_ticker_direct",
         )
         query = st.text_input(
             "企業名・業種で検索",
-            placeholder="例: コメダ、航空、小売業、カフェ",
+            placeholder="例: コメダ、航空、小売業、三菱重工業",
             key=f"{key_prefix}_company_query",
         )
     else:
         direct_col, query_col = st.columns([0.95, 1.35])
         direct_text = direct_col.text_input(
             "証券コードを直接入力",
-            placeholder="例: 3543, 3087",
+            placeholder="例: 3543, 3087, 7011",
             key=f"{key_prefix}_ticker_direct",
         )
         query = query_col.text_input(
             "企業名・業種で検索",
-            placeholder="例: コメダ、航空、小売業、カフェ",
+            placeholder="例: コメダ、航空、小売業、三菱重工業",
             key=f"{key_prefix}_company_query",
         )
 
@@ -2399,9 +2399,9 @@ def _render_company_search_selector(
                         st.rerun()
 
     if direct_text and not direct_tickers:
-        st.warning("入力された証券コードはサンプル企業マスターに見つかりません。EDINET取得は可能ですが、現行分析には企業マスター登録が必要です。")
+        st.warning("入力された証券コードは登録済み企業マスターに見つかりません。EDINET取得タブでは書類検索を続けられます。")
     if filtered.empty:
-        st.info("検索条件に合う企業がありません。検索語を短くしてみてください。")
+        st.info("登録済み企業に候補がありません。検索語を短くするか、EDINET取得タブで証券コードから書類を探してください。")
     else:
         st.caption(f"候補: {len(filtered)}社表示 / 選択中: {len(selected)}社")
     return selected

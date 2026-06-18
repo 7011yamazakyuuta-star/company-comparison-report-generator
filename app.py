@@ -3194,6 +3194,7 @@ def _render_workspace_summary(
     industry_mode: str,
     industry_policy: dict,
     warnings: list[str],
+    available_company_count: int | None = None,
 ) -> None:
     company_names = " / ".join(selected_companies["company_name"].astype(str).tolist())
     warning_label = f"{len(warnings)}件" if warnings else "なし"
@@ -3206,70 +3207,122 @@ def _render_workspace_summary(
     col_c.metric("モード", mode_label)
     col_d.metric("警告", warning_label)
     st.caption(f"選択中: {company_names} / 業種判定: {industry_label}")
+    if available_company_count is not None:
+        st.caption(f"利用可能な企業候補: {available_company_count:,}社")
 
 
-def _render_sidebar_open_script() -> None:
-    if not st.session_state.pop("request_open_settings_sidebar", False):
-        return
+def _render_sidebar_launcher(workflow_mode: str) -> None:
+    should_open = bool(st.session_state.pop("request_open_settings_sidebar", False))
     components.html(
-        """
+        f"""
         <script>
         const doc = window.parent.document;
+        const active = {str(workflow_mode == "detail").lower()};
+        const shouldOpen = {str(should_open).lower()};
 
-        function sidebarLooksOpen() {
+        function getLauncher() {{
+          let launcher = doc.getElementById('company-report-sidebar-launcher');
+          if (launcher) return launcher;
+          launcher = doc.createElement('button');
+          launcher.id = 'company-report-sidebar-launcher';
+          launcher.type = 'button';
+          launcher.setAttribute('aria-label', '詳細設定を開く');
+          launcher.textContent = '☰';
+          launcher.style.position = 'fixed';
+          launcher.style.left = '16px';
+          launcher.style.top = '16px';
+          launcher.style.zIndex = '2147483647';
+          launcher.style.width = '44px';
+          launcher.style.height = '44px';
+          launcher.style.borderRadius = '999px';
+          launcher.style.border = '1px solid rgba(255,255,255,.92)';
+          launcher.style.background = 'rgba(255,255,255,.72)';
+          launcher.style.backdropFilter = 'blur(18px) saturate(180%)';
+          launcher.style.webkitBackdropFilter = 'blur(18px) saturate(180%)';
+          launcher.style.boxShadow = '0 16px 35px rgba(0,0,0,.16), inset 0 1px 0 rgba(255,255,255,.98)';
+          launcher.style.color = '#1d1d1f';
+          launcher.style.fontSize = '22px';
+          launcher.style.lineHeight = '1';
+          launcher.style.cursor = 'pointer';
+          launcher.style.display = 'none';
+          launcher.style.alignItems = 'center';
+          launcher.style.justifyContent = 'center';
+          launcher.style.padding = '0';
+          launcher.addEventListener('mouseenter', () => {{
+            launcher.style.transform = 'translateY(-1px)';
+            launcher.style.boxShadow = '0 18px 42px rgba(0,0,0,.20), inset 0 1px 0 rgba(255,255,255,1)';
+          }});
+          launcher.addEventListener('mouseleave', () => {{
+            launcher.style.transform = 'translateY(0)';
+            launcher.style.boxShadow = '0 16px 35px rgba(0,0,0,.16), inset 0 1px 0 rgba(255,255,255,.98)';
+          }});
+          launcher.addEventListener('click', () => openSidebar());
+          doc.body.appendChild(launcher);
+          return launcher;
+        }}
+
+        function sidebarLooksOpen() {{
           const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
           if (!sidebar) return false;
           return sidebar.getBoundingClientRect().width > 120;
-        }
+        }}
 
-        function clickOpenControl() {
+        function visible(el) {{
+          if (!el) return false;
+          const rect = el.getBoundingClientRect();
+          const style = window.parent.getComputedStyle(el);
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+        }}
+
+        function openSidebar() {{
           if (sidebarLooksOpen()) return true;
           const selectors = [
             '[data-testid="collapsedControl"] button',
             '[data-testid="collapsedControl"]',
             '[data-testid="stSidebarCollapsedControl"] button',
             '[data-testid="stSidebarCollapsedControl"]',
+            '[data-testid*="SidebarCollapsed"] button',
+            '[data-testid*="SidebarCollapsed"]',
             'button[aria-label="Open sidebar"]',
             'button[aria-label="Expand sidebar"]',
             'button[title="Open sidebar"]',
             'button[title="Expand sidebar"]'
           ];
-          for (const selector of selectors) {
+          for (const selector of selectors) {{
             const el = doc.querySelector(selector);
-            if (!el) continue;
+            if (!visible(el)) continue;
             const target = el.tagName === 'BUTTON' ? el : (el.querySelector('button') || el);
             target.click();
             return true;
-          }
+          }}
+          const buttons = Array.from(doc.querySelectorAll('button'));
+          const button = buttons.find((candidate) => {{
+            const label = `${{candidate.getAttribute('aria-label') || ''}} ${{candidate.getAttribute('title') || ''}}`.toLowerCase();
+            return visible(candidate) && label.includes('sidebar') && (label.includes('open') || label.includes('expand'));
+          }});
+          if (button) {{
+            button.click();
+            return true;
+          }}
+          const eventInit = {{ key: 'b', code: 'KeyB', ctrlKey: true, metaKey: false, bubbles: true }};
+          doc.dispatchEvent(new KeyboardEvent('keydown', eventInit));
+          window.parent.dispatchEvent(new KeyboardEvent('keydown', eventInit));
           return false;
-        }
+        }}
 
-        setTimeout(clickOpenControl, 60);
-        setTimeout(clickOpenControl, 260);
-        setTimeout(clickOpenControl, 650);
+        const launcher = getLauncher();
+        launcher.style.display = active ? 'flex' : 'none';
+
+        if (active && shouldOpen) {{
+          setTimeout(openSidebar, 60);
+          setTimeout(openSidebar, 260);
+          setTimeout(openSidebar, 650);
+        }}
         </script>
         """,
         height=0,
         width=0,
     )
-
-
-def _render_detail_settings_recovery(company_master: pd.DataFrame, selected_tickers: list[str]) -> None:
-    company_count = int(company_master["ticker"].astype(str).nunique()) if "ticker" in company_master.columns else len(company_master)
-    selected_count = len({str(ticker) for ticker in selected_tickers})
-    with st.container(border=True):
-        col_text, col_button = st.columns([2.6, 1])
-        with col_text:
-            st.markdown("**詳細設定パネル**")
-            st.caption(
-                f"左の設定パネルを閉じた場合は、ここから開き直せます。"
-                f" 現在の企業候補は {company_count:,} 社、選択中は {selected_count} 社です。"
-            )
-        with col_button:
-            if st.button("設定パネルを開く", key="open_settings_sidebar", use_container_width=True):
-                st.session_state.request_open_settings_sidebar = True
-                st.rerun()
-    _render_sidebar_open_script()
 
 
 def _preset_label(item: tuple[str, dict]) -> str:
@@ -3342,7 +3395,7 @@ def _clear_filings_cache() -> None:
 
 
 def _load_dataset_with_edinet_directory():
-    dataset = _load_dataset_with_edinet_directory()
+    dataset = load_dataset(use_sqlite=True)
     try:
         filings = _load_filings_for_company_directory(50_000)
     except Exception:
@@ -3683,7 +3736,7 @@ def main() -> None:
     rubric = load_rubric()
     industry_policy = load_industry_policy()
     presets = load_presets()
-    dataset = load_dataset(use_sqlite=True)
+    dataset = _load_dataset_with_edinet_directory()
     ordered_preset_ids = [preset_id for preset_id, _ in _ordered_presets(presets)]
 
     if "workflow_mode" not in st.session_state:
@@ -3743,6 +3796,7 @@ def main() -> None:
         f'<div class="workflow-mode-marker workflow-mode-{workflow_marker}"></div>',
         unsafe_allow_html=True,
     )
+    _render_sidebar_launcher(str(workflow_mode))
 
     preset_id = st.session_state.selected_preset_id
     preset = presets[preset_id]
@@ -3855,8 +3909,6 @@ def main() -> None:
         )
         return
 
-    _render_detail_settings_recovery(dataset.company_master, selected_tickers)
-
     _render_workspace_summary(
         preset_id=preset_id,
         preset=preset,
@@ -3865,6 +3917,7 @@ def main() -> None:
         industry_mode=industry_mode,
         industry_policy=industry_policy,
         warnings=warning_list,
+        available_company_count=int(dataset.company_master["ticker"].astype(str).nunique()),
     )
 
     detail_section = _render_detail_section_nav()

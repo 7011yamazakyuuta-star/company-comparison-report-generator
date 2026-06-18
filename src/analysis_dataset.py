@@ -6,7 +6,11 @@ import pandas as pd
 
 from .company_master import normalize_ticker_column
 from .data_loader import Dataset
-from .edinet_repository import FINANCIAL_METRIC_COLUMNS, load_edinet_financial_rows
+from .edinet_parser import FINANCIAL_TAG_ALIASES
+from .edinet_repository import load_edinet_financial_rows
+
+
+FINANCIAL_METRIC_COLUMNS = list(FINANCIAL_TAG_ALIASES.keys())
 
 
 DATA_SOURCE_SAMPLE = "sample"

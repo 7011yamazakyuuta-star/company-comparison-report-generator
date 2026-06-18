@@ -2225,7 +2225,7 @@ def _filter_company_master(company_master: pd.DataFrame, query: str) -> pd.DataF
     mask = pd.Series(False, index=company_master.index)
     for column in search_columns:
         if column in company_master.columns:
-            mask = mask | company_master[column].astype(str).str.contains(query, case=False, na=False)
+            mask = mask | company_master[column].astype(str).str.contains(query, case=False, na=False, regex=False)
     return company_master[mask].copy()
 
 

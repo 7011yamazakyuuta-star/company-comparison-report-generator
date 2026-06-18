@@ -17,3 +17,17 @@ def test_heavy_industry_companies_are_available_for_manual_search():
 
     for frame in [dataset.financials, dataset.market_data, dataset.manual_kpis]:
         assert heavy_tickers.issubset(set(frame["ticker"]))
+
+
+def test_manual_company_search_handles_heavy_industry_and_literal_symbols():
+    from app import _filter_company_master
+
+    master = load_sample_dataset().company_master
+
+    by_name = _filter_company_master(master, "三菱重工業")
+    by_theme = _filter_company_master(master, "重工")
+    by_symbol = _filter_company_master(master, "?")
+
+    assert by_name["ticker"].tolist() == ["7011"]
+    assert {"7011", "7012", "7013"}.issubset(set(by_theme["ticker"]))
+    assert by_symbol.empty

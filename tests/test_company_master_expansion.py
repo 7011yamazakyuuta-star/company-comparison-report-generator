@@ -31,3 +31,25 @@ def test_manual_company_search_handles_heavy_industry_and_literal_symbols():
     assert by_name["ticker"].tolist() == ["7011"]
     assert {"7011", "7012", "7013"}.issubset(set(by_theme["ticker"]))
     assert by_symbol.empty
+
+
+def test_sample_directory_has_broader_edinet_enabled_candidates():
+    from app import _filter_company_master
+
+    dataset = load_sample_dataset()
+    master = dataset.company_master
+    broad_tickers = {"7203", "7267", "7201", "2802", "2801", "2002", "6758", "6501", "8058"}
+
+    assert broad_tickers.issubset(set(master["ticker"]))
+    assert broad_tickers.issubset(set(dataset.financials["ticker"]))
+    assert broad_tickers.issubset(set(dataset.market_data["ticker"]))
+    assert broad_tickers.issubset(set(dataset.manual_kpis["ticker"]))
+    assert master.loc[master["ticker"].isin(broad_tickers), "edinet_code"].str.startswith("E").all()
+
+    auto_candidates = _filter_company_master(master, "自動車")
+    food_candidates = _filter_company_master(master, "食品")
+    industry_candidates = _filter_company_master(master, "工業")
+
+    assert {"7203", "7267", "7201"}.issubset(set(auto_candidates["ticker"]))
+    assert {"2802", "2801", "2002"}.issubset(set(food_candidates["ticker"]))
+    assert {"7011", "7012"}.issubset(set(industry_candidates["ticker"]))

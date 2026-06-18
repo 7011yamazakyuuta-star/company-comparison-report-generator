@@ -898,7 +898,7 @@ def _apply_style() -> None:
         }
         .company-selection-row {
             display: grid;
-            grid-template-columns: 4.2rem 1fr;
+            grid-template-columns: 2.75rem minmax(3.6rem, 4.8rem) 1fr;
             gap: 0.55rem;
             align-items: center;
             padding: 0.55rem 0.65rem;
@@ -908,6 +908,24 @@ def _apply_style() -> None:
             box-shadow:
                 inset 0 1px 0 rgba(255, 255, 255, 0.9),
                 0 6px 18px rgba(30, 38, 55, 0.06);
+        }
+        .company-selection-avatar {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 2.45rem;
+            height: 2.45rem;
+            border-radius: 0.72rem;
+            color: #0b57d0;
+            background:
+                radial-gradient(circle at 28% 18%, rgba(255, 255, 255, 0.95), transparent 34%),
+                linear-gradient(145deg, rgba(226, 239, 255, 0.94), rgba(255, 255, 255, 0.62));
+            border: 1px solid rgba(255, 255, 255, 0.92);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.98),
+                0 8px 18px rgba(48, 93, 170, 0.13);
+            font-size: 0.7rem;
+            font-weight: 760;
         }
         .company-selection-code {
             color: #0066cc;
@@ -2273,8 +2291,10 @@ def _render_company_selection_list(company_master: pd.DataFrame, tickers: list[s
         industry = escape(str(row.get("JPX業種", "")))
         theme = escape(str(row.get("テーマ", "")))
         edinet_code = escape(str(row.get("EDINETコード", "")))
+        avatar = escape(str(row.get("証券コード", ""))[-2:] or "Co")
         rows.append(
             f'<div class="company-selection-row">'
+            f'<div class="company-selection-avatar">{avatar}</div>'
             f'<div class="company-selection-code">{code}</div>'
             f'<div class="company-selection-name">{name}</div>'
             f'<div class="company-selection-meta">{industry} / {theme} / EDINET {edinet_code}</div>'
@@ -2307,32 +2327,41 @@ def _render_company_search_selector(
         st.caption("まず登録済み企業から選びます。候補にない場合はEDINET取得タブで証券コードから書類を探せます。")
         direct_text = st.text_input(
             "証券コードを直接入力",
-            placeholder="例: 3543, 3087, 7011",
+            placeholder="例: 7203, 2802, 7011",
             key=f"{key_prefix}_ticker_direct",
         )
         query = st.text_input(
             "企業名・業種で検索",
-            placeholder="例: コメダ、航空、小売業、三菱重工業",
+            placeholder="例: ○○自動車、□□食品、××工業、三菱",
             key=f"{key_prefix}_company_query",
         )
     else:
         direct_col, query_col = st.columns([0.95, 1.35])
         direct_text = direct_col.text_input(
             "証券コードを直接入力",
-            placeholder="例: 3543, 3087, 7011",
+            placeholder="例: 7203, 2802, 7011",
             key=f"{key_prefix}_ticker_direct",
         )
         query = query_col.text_input(
             "企業名・業種で検索",
-            placeholder="例: コメダ、航空、小売業、三菱重工業",
+            placeholder="例: ○○自動車、□□食品、××工業、三菱",
             key=f"{key_prefix}_company_query",
         )
 
-    direct_tickers = [ticker for ticker in _parse_ticker_text(direct_text) if ticker in valid_tickers]
-    selected_pool = list(dict.fromkeys([*current_default, *direct_tickers]))
-    if selected_pool != current_default:
-        st.session_state[selected_state_key] = selected_pool
-    filtered = _filter_company_master(company_master, query).head(25)
+    requested_tickers = _parse_ticker_text(direct_text)
+    direct_tickers = [ticker for ticker in requested_tickers if ticker in valid_tickers]
+    missing_direct_tickers = [ticker for ticker in requested_tickers if ticker not in valid_tickers]
+    selected_pool = list(dict.fromkeys(current_default))
+    query_filtered = _filter_company_master(company_master, query)
+    if direct_tickers:
+        direct_filtered = company_master[company_master["ticker"].astype(str).isin(direct_tickers)].copy()
+        if query:
+            filtered = pd.concat([direct_filtered, query_filtered], ignore_index=True).drop_duplicates("ticker")
+        else:
+            filtered = direct_filtered
+    else:
+        filtered = query_filtered
+    filtered = filtered.head(25)
 
     if compact:
         st.markdown('<div class="company-remove-caption">候補から追加</div>', unsafe_allow_html=True)
@@ -2398,8 +2427,9 @@ def _render_company_search_selector(
                         st.session_state[selected_state_key] = [item for item in selected if item != ticker]
                         st.rerun()
 
-    if direct_text and not direct_tickers:
-        st.warning("入力された証券コードは登録済み企業マスターに見つかりません。EDINET取得タブでは書類検索を続けられます。")
+    if missing_direct_tickers:
+        missing_text = ", ".join(missing_direct_tickers)
+        st.warning(f"{missing_text} は登録済み企業マスターに見つかりません。EDINET取得タブでは書類検索を続けられます。")
     if filtered.empty:
         st.info("登録済み企業に候補がありません。検索語を短くするか、EDINET取得タブで証券コードから書類を探してください。")
     else:

@@ -42,6 +42,15 @@ COMPLETENESS_COLUMNS = [
     "pbr",
 ]
 
+OUTLIER_LIMITS = {
+    # Ratios are decimal values. These bands are intentionally wide; values
+    # outside them usually indicate unit, sign, or scale problems in extracted
+    # source data rather than meaningful operating performance.
+    "operating_margin": (-1.0, 1.0),
+    "net_margin": (-1.0, 1.0),
+    "fcf_margin": (-1.5, 1.5),
+}
+
 
 def _numeric(series: pd.Series) -> pd.Series:
     return pd.to_numeric(series, errors="coerce")
@@ -70,11 +79,38 @@ def _relative_score(series: pd.Series, *, higher_is_better: bool = True) -> pd.S
     return scores
 
 
+def _valid_metric(frame: pd.DataFrame, column: str) -> pd.Series:
+    values = _numeric(frame[column]) if column in frame.columns else pd.Series(pd.NA, index=frame.index, dtype="Float64")
+    limits = OUTLIER_LIMITS.get(column)
+    if limits is None:
+        return values
+    low, high = limits
+    return values.mask((values < low) | (values > high))
+
+
+def _outlier_flags(frame: pd.DataFrame) -> pd.Series:
+    labels = {
+        "operating_margin": "営業利益率",
+        "net_margin": "当期利益率",
+        "fcf_margin": "FCFマージン",
+    }
+    rows: list[str] = []
+    for _, row in frame.iterrows():
+        flags: list[str] = []
+        for column, (low, high) in OUTLIER_LIMITS.items():
+            value = pd.to_numeric(pd.Series([row.get(column)]), errors="coerce").iloc[0]
+            if pd.notna(value) and (float(value) < low or float(value) > high):
+                flags.append(labels[column])
+        rows.append("、".join(flags))
+    return pd.Series(rows, index=frame.index)
+
+
 def _mean_scores(*scores: pd.Series) -> pd.Series:
     if not scores:
         return pd.Series(dtype="Float64")
-    frame = pd.concat(scores, axis=1)
-    return frame.mean(axis=1, skipna=True).round(1).astype("Float64")
+    frame = pd.concat(scores, axis=1).astype("Float64")
+    counts = frame.notna().sum(axis=1).astype("Float64").mask(lambda series: series == 0)
+    return frame.sum(axis=1, min_count=1).divide(counts).round(1).astype("Float64")
 
 
 def _weighted_score(frame: pd.DataFrame) -> pd.Series:
@@ -125,26 +161,33 @@ def build_company_scores(metrics: pd.DataFrame) -> pd.DataFrame:
         latest = latest.sort_values("ticker").reset_index(drop=True)
 
     history = metrics.copy()
-    history["fcf_margin"] = _safe_ratio(history.get("fcf", pd.Series(index=history.index)), history["revenue"])
+    if "fcf_margin" not in history.columns:
+        history["fcf_margin"] = _safe_ratio(history.get("fcf", pd.Series(index=history.index)), history["revenue"])
     history["operating_cf_margin"] = _safe_ratio(history["cash_flow_operating"], history["revenue"])
     trend = history.groupby("ticker", as_index=False).agg(
         revenue_growth_volatility=("revenue_growth_rate", "std"),
         operating_margin_volatility=("operating_margin", "std"),
     )
 
-    latest["fcf_margin"] = _safe_ratio(latest.get("fcf", pd.Series(index=latest.index)), latest["revenue"])
+    if "fcf_margin" not in latest.columns:
+        latest["fcf_margin"] = _safe_ratio(latest.get("fcf", pd.Series(index=latest.index)), latest["revenue"])
     latest["operating_cf_margin"] = _safe_ratio(latest["cash_flow_operating"], latest["revenue"])
     latest = latest.merge(trend, on="ticker", how="left")
+    latest["outlier_flags"] = _outlier_flags(latest)
 
     existing_completeness = [column for column in COMPLETENESS_COLUMNS if column in latest.columns]
     if existing_completeness:
-        latest["data_completeness"] = latest[existing_completeness].notna().mean(axis=1).mul(100).round(1)
+        completeness_frame = pd.DataFrame(
+            {column: _valid_metric(latest, column) for column in existing_completeness},
+            index=latest.index,
+        )
+        latest["data_completeness"] = completeness_frame.notna().mean(axis=1).mul(100).round(1)
     else:
         latest["data_completeness"] = pd.NA
 
-    latest["growth_score"] = _relative_score(latest["revenue_growth_rate"])
+    latest["growth_score"] = _relative_score(_valid_metric(latest, "revenue_growth_rate"))
     latest["profitability_score"] = _mean_scores(
-        _relative_score(latest["operating_margin"]),
+        _relative_score(_valid_metric(latest, "operating_margin")),
         _relative_score(latest["roa"]),
         _relative_score(latest["roe"]),
     )
@@ -155,7 +198,7 @@ def build_company_scores(metrics: pd.DataFrame) -> pd.DataFrame:
         _relative_score(latest["fixed_long_term_adequacy_ratio"], higher_is_better=False),
     )
     latest["cashflow_score"] = _mean_scores(
-        _relative_score(latest["fcf_margin"]),
+        _relative_score(_valid_metric(latest, "fcf_margin")),
         _relative_score(latest["operating_cf_margin"]),
         _relative_score(latest["fcf"]),
     )
@@ -187,6 +230,7 @@ def build_company_scores(metrics: pd.DataFrame) -> pd.DataFrame:
         "analysis_band",
         "fcf_margin",
         "operating_cf_margin",
+        "outlier_flags",
         "revenue_growth_volatility",
         "operating_margin_volatility",
     ]
@@ -207,4 +251,11 @@ def build_scoring_notes(scores: pd.DataFrame, missing_label: str = "推定不可
             f"データ充足率の確認対象: {weakest.get('company_name', weakest.get('ticker', ''))} "
             f"({weakest.get('data_completeness', missing_label)}%)"
         )
+    flagged = scores[scores.get("outlier_flags", pd.Series(index=scores.index)).astype(str).str.len() > 0]
+    if not flagged.empty:
+        targets = "、".join(
+            f"{row.get('company_name', row.get('ticker', ''))}: {row.get('outlier_flags')}"
+            for _, row in flagged.iterrows()
+        )
+        notes.append(f"異常値候補があるため、該当指標は相対スコアから除外しました。単位・スケール確認が必要です。対象: {targets}")
     return notes

@@ -8,11 +8,48 @@ from .config_loader import load_analysis_policy
 from .metrics.financial import latest_metrics
 
 
+OUTLIER_LIMITS = {
+    "operating_margin": (-1.0, 1.0),
+    "net_margin": (-1.0, 1.0),
+    "fcf_margin": (-1.5, 1.5),
+}
+
+OUTLIER_LABELS = {
+    "operating_margin": "営業利益率",
+    "net_margin": "当期利益率",
+    "fcf_margin": "FCFマージン",
+}
+
+PLUS_ALPHA_MISSING_REASONS = {
+    "ROA / ROE分解": "当期利益率、総資産回転率、財務レバレッジ、ROA、ROEが必要",
+    "損益分岐点分析": "固定費・変動費が必要",
+    "売上増減分析": "売上高、前年比、客数・単価・数量・店舗数などの分解データが必要",
+    "利益増減分析": "営業利益、営業利益率、原材料費、人件費、為替などの要因データが必要",
+    "4P / 4C分析": "商品・価格・流通・販促・顧客便益・顧客負担データが必要",
+    "顧客関係分析": "リピート率、会員制度、顧客単価、顧客接点データが必要",
+    "バリューチェーン分析": "調達、製造、物流、販売、サービスの工程別データが必要",
+    "FCF分析": "営業CF、設備投資、FCFが必要",
+    "PER / PBR比較": "株価、EPS、BPS、PER、PBRが必要",
+    "将来シナリオ分析": "外部環境、原材料費、人件費、為替、投資計画などの追加情報が必要",
+    "付加価値分析": "人件費、減価償却費、支払利息、税金などの詳細データが必要",
+    "利益処分状況の分析": "配当、内部留保、自己株式取得などの利益処分データが必要",
+}
+
+
 def _num(value: object) -> float | None:
     numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
     if pd.isna(numeric):
         return None
     return float(numeric)
+
+
+def _is_outlier(value: object, column: str) -> bool:
+    numeric = _num(value)
+    limits = OUTLIER_LIMITS.get(column)
+    if numeric is None or limits is None:
+        return False
+    low, high = limits
+    return numeric < low or numeric > high
 
 
 def _fmt_percent(value: object, missing_label: str = "推定不可") -> str:
@@ -204,6 +241,75 @@ def build_plus_alpha_analysis_table(
                 "将来シナリオ": scenario,
                 "付加価値分析": f"{missing_label}。人件費、減価償却費、支払利息、税金などの詳細データが必要。",
                 "利益処分状況": f"{missing_label}。配当、内部留保、自己株式取得などの詳細データが必要。",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def build_plus_alpha_status_table(
+    metrics: pd.DataFrame,
+    *,
+    analysis_policy: dict[str, Any] | None = None,
+    missing_label: str = "推定不可",
+) -> pd.DataFrame:
+    policy = analysis_policy or load_analysis_policy()
+    framework = policy.get("required_alpha_framework", {})
+    if metrics.empty:
+        return pd.DataFrame(
+            [
+                {
+                    "＋α項目": str(item.get("name", "")),
+                    "状態": "未実施／推定不可",
+                    "判定メモ": f"{missing_label}。{PLUS_ALPHA_MISSING_REASONS.get(str(item.get('name', '')), '追加データが必要')}",
+                    "追加で必要なデータ": PLUS_ALPHA_MISSING_REASONS.get(str(item.get("name", "")), "追加データが必要"),
+                }
+                for item in framework.get("plus_alpha", [])
+            ]
+        )
+
+    latest = latest_metrics(metrics)
+    rows: list[dict[str, str]] = []
+    for item in framework.get("plus_alpha", []):
+        name = str(item.get("name", ""))
+        columns = [str(column) for column in item.get("data_columns", [])]
+        existing = [column for column in columns if column in latest.columns]
+        total_required = len(columns) * max(len(latest), 1)
+        available = int(latest[existing].notna().sum().sum()) if existing else 0
+        required_met = total_required > 0 and available == total_required and len(existing) == len(columns)
+        partial = available > 0
+
+        if required_met:
+            status = "実施済み"
+        elif partial:
+            status = "一部実施"
+        else:
+            status = "未実施／推定不可"
+
+        outlier_columns = [
+            column
+            for column in existing
+            if column in OUTLIER_LIMITS and latest[column].apply(lambda value: _is_outlier(value, column)).any()
+        ]
+        outlier_note = ""
+        if outlier_columns:
+            status = "一部実施" if status == "実施済み" else status
+            outlier_note = "。ただし桁異常あり: " + "、".join(OUTLIER_LABELS[column] for column in outlier_columns)
+
+        missing_columns = [column for column in columns if column not in existing or latest[column].isna().any()]
+        missing_text = "、".join(missing_columns) if missing_columns else "なし"
+        reason = PLUS_ALPHA_MISSING_REASONS.get(name, "追加データが必要")
+        if status == "実施済み":
+            memo = f"必要データを確認済み{outlier_note}。"
+        elif status == "一部実施":
+            memo = f"一部データを確認済み。未充足: {missing_text}{outlier_note}。"
+        else:
+            memo = f"未実施。{reason}"
+        rows.append(
+            {
+                "＋α項目": name,
+                "状態": status,
+                "判定メモ": memo,
+                "追加で必要なデータ": reason,
             }
         )
     return pd.DataFrame(rows)

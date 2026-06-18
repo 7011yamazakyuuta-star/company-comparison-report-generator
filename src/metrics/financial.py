@@ -22,6 +22,7 @@ METRIC_LABELS = {
     "break_even_sales": "損益分岐点売上高",
     "safety_margin": "安全余裕率",
     "operating_leverage": "営業レバレッジ",
+    "fcf_margin": "FCFマージン",
     "per": "PER",
     "pbr": "PBR",
 }
@@ -99,6 +100,7 @@ def compute_financial_metrics(
         df["fixed_assets"], df["equity"] + df["long_term_liabilities"]
     )
     df["fcf"] = df["cash_flow_operating"] - df["capex"]
+    df["fcf_margin"] = _safe_divide(df["fcf"], df["revenue"])
     contribution_margin_ratio = 1 - df["variable_cost_ratio"]
     df["contribution_margin"] = df["revenue"] * contribution_margin_ratio
     df["break_even_sales"] = _safe_divide(df["fixed_cost_estimate"], contribution_margin_ratio)
@@ -112,4 +114,3 @@ def latest_metrics(metrics: pd.DataFrame) -> pd.DataFrame:
         return metrics.copy()
     idx = metrics.sort_values(["ticker", "fiscal_year"]).groupby("ticker")["fiscal_year"].idxmax()
     return metrics.loc[idx].sort_values("ticker").reset_index(drop=True)
-

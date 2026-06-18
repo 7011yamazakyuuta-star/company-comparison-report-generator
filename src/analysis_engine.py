@@ -97,15 +97,24 @@ def _relative_position(value: object, median: object, missing_label: str) -> str
     return "中央値並み"
 
 
+def _median_or_na(frame: pd.DataFrame, column: str) -> object:
+    if column not in frame.columns:
+        return pd.NA
+    values = pd.to_numeric(frame[column], errors="coerce").dropna()
+    if values.empty:
+        return pd.NA
+    return values.median()
+
+
 def build_dupont_driver_table(metrics: pd.DataFrame, missing_label: str = "推定不可") -> pd.DataFrame:
     latest = _latest_ordered(metrics)
     if latest.empty:
         return pd.DataFrame()
 
     medians = {
-        "net_margin": latest["net_margin"].median() if "net_margin" in latest.columns else pd.NA,
-        "asset_turnover": latest["asset_turnover"].median() if "asset_turnover" in latest.columns else pd.NA,
-        "financial_leverage": latest["financial_leverage"].median() if "financial_leverage" in latest.columns else pd.NA,
+        "net_margin": _median_or_na(latest, "net_margin"),
+        "asset_turnover": _median_or_na(latest, "asset_turnover"),
+        "financial_leverage": _median_or_na(latest, "financial_leverage"),
     }
 
     rows: list[dict[str, str]] = []

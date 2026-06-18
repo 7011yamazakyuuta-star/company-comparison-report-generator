@@ -19,10 +19,11 @@ from .analysis_engine import (
 from .assignment_filters import check_assignment_conditions
 from .charts import create_charts
 from .company_master import select_companies
-from .config_loader import PROJECT_ROOT, load_industry_policy, load_rubric
+from .config_loader import PROJECT_ROOT, load_analysis_policy, load_industry_policy, load_rubric
 from .course_framework import (
     build_plus_alpha_analysis_table,
     build_plus_alpha_commentary,
+    build_plus_alpha_status_table,
     build_required_plus_alpha_table,
 )
 from .data_loader import Dataset, load_dataset
@@ -56,6 +57,7 @@ PERCENT_COLUMNS = {
     "fixed_ratio",
     "fixed_long_term_adequacy_ratio",
     "safety_margin",
+    "fcf_margin",
 }
 
 NUMBER_COLUMNS = {
@@ -73,6 +75,20 @@ NUMBER_COLUMNS = {
     "per",
     "pbr",
 }
+
+OUTLIER_LIMITS = {
+    "operating_margin": (-1.0, 1.0),
+    "net_margin": (-1.0, 1.0),
+    "fcf_margin": (-1.5, 1.5),
+}
+
+OUTLIER_LABELS = {
+    "operating_margin": "営業利益率",
+    "net_margin": "当期利益率",
+    "fcf_margin": "FCFマージン",
+}
+
+CORE_FINANCIAL_COLUMNS = ["revenue", "operating_income", "net_income", "total_assets", "equity"]
 
 SCORE_COLUMNS = {
     "data_completeness",
@@ -108,6 +124,10 @@ def _missing_label(rubric: dict[str, Any]) -> str:
 def _format_value(value: object, column: str, missing_label: str) -> str:
     if value is None or pd.isna(value):
         return missing_label
+    if _is_outlier_value(value, column):
+        numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+        display = f"{numeric * 100:.1f}%" if column in PERCENT_COLUMNS else f"{numeric:,.2f}"
+        return f"異常値候補（{display}、単位・スケール確認）"
     if column in PERCENT_COLUMNS:
         numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
         return missing_label if pd.isna(numeric) else f"{numeric * 100:.1f}%"
@@ -122,6 +142,17 @@ def _format_value(value: object, column: str, missing_label: str) -> str:
         numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
         return missing_label if pd.isna(numeric) else f"{numeric:.1f}"
     return str(value)
+
+
+def _is_outlier_value(value: object, column: str) -> bool:
+    limits = OUTLIER_LIMITS.get(column)
+    if limits is None:
+        return False
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        return False
+    low, high = limits
+    return float(numeric) < low or float(numeric) > high
 
 
 def _display_table(
@@ -165,12 +196,187 @@ def _set_document_style(document: Document) -> None:
 
 
 def _mode_label(app_mode: str) -> str:
-    return "課題モード" if app_mode == "assignment" else "汎用モード"
+    if app_mode == "assignment":
+        return "課題モード"
+    if app_mode == "manual_custom":
+        return "manual_custom（手動比較）"
+    return "汎用モード"
 
 
 def _latest_with_company(metrics: pd.DataFrame) -> pd.DataFrame:
     latest = latest_metrics(metrics)
     return latest.sort_values(["_selection_order", "ticker"]).reset_index(drop=True)
+
+
+def _missing_data_table(metrics: pd.DataFrame, missing_label: str) -> pd.DataFrame:
+    latest = _latest_with_company(metrics)
+    monitored = [
+        "revenue",
+        "operating_income",
+        "net_income",
+        "total_assets",
+        "equity",
+        "cash_flow_operating",
+        "capex",
+        "fcf",
+        "fcf_margin",
+        "per",
+        "pbr",
+    ]
+    labels = {
+        "revenue": "売上高",
+        "operating_income": "営業利益",
+        "net_income": "当期利益",
+        "total_assets": "総資産",
+        "equity": "自己資本",
+        "cash_flow_operating": "営業CF",
+        "capex": "設備投資",
+        "fcf": "FCF",
+        "fcf_margin": "FCFマージン",
+        "per": "PER",
+        "pbr": "PBR",
+    }
+    rows: list[dict[str, str]] = []
+    for _, row in latest.iterrows():
+        missing = [labels.get(column, column) for column in monitored if column in latest.columns and pd.isna(row.get(column))]
+        abnormal = [
+            OUTLIER_LABELS[column]
+            for column in OUTLIER_LIMITS
+            if column in latest.columns and _is_outlier_value(row.get(column), column)
+        ]
+        rows.append(
+            {
+                "証券コード": str(row.get("ticker", "")),
+                "企業名": str(row.get("company_name", "")),
+                "不足データ": "、".join(missing) if missing else "なし",
+                "異常値候補": "、".join(abnormal) if abnormal else "なし",
+                "確認メモ": "単位・スケール確認が必要" if abnormal else (missing_label if missing else "主要項目確認済み"),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _core_financial_comparison_message(metrics: pd.DataFrame) -> str | None:
+    latest = _latest_with_company(metrics)
+    missing_pairs: list[str] = []
+    labels = {
+        "revenue": "売上高",
+        "operating_income": "営業利益",
+        "net_income": "当期純利益",
+        "total_assets": "総資産",
+        "equity": "自己資本",
+    }
+    for _, row in latest.iterrows():
+        missing = [labels[column] for column in CORE_FINANCIAL_COLUMNS if column not in latest.columns or pd.isna(row.get(column))]
+        if missing:
+            missing_pairs.append(f"{row.get('company_name', row.get('ticker', ''))}: {', '.join(missing)}")
+    if not missing_pairs:
+        return None
+    return "主要財務比較は未成立: " + " / ".join(missing_pairs)
+
+
+def _has_financial_chart_data(metrics: pd.DataFrame) -> bool:
+    chart_columns = [
+        "revenue",
+        "operating_margin",
+        "roa",
+        "roe",
+        "equity_ratio",
+        "cash_flow_operating",
+        "fcf",
+    ]
+    return any(column in metrics.columns and pd.to_numeric(metrics[column], errors="coerce").notna().any() for column in chart_columns)
+
+
+def _plus_alpha_overall_status(status_table: pd.DataFrame) -> str:
+    if status_table.empty:
+        return "NG"
+    statuses = status_table["状態"].astype(str).tolist()
+    if statuses and all(status == "実施済み" for status in statuses):
+        return "OK"
+    if any(status in {"実施済み", "一部実施"} for status in statuses):
+        return "一部"
+    return "NG"
+
+
+def _completion_score_table(
+    *,
+    metrics: pd.DataFrame,
+    companies: pd.DataFrame,
+    chart_paths: dict[str, Path],
+    plus_alpha_status: pd.DataFrame,
+    edinet_filings: pd.DataFrame | None,
+) -> pd.DataFrame:
+    latest = _latest_with_company(metrics)
+    table_ok = "OK" if not metrics.empty else "NG"
+    graph_ok = "OK" if any(path.exists() for path in chart_paths.values()) else "NG"
+    core_complete = latest[CORE_FINANCIAL_COLUMNS].notna().all(axis=1) if set(CORE_FINANCIAL_COLUMNS).issubset(latest.columns) else pd.Series(False, index=latest.index)
+    two_company_ok = "OK" if int(core_complete.sum()) >= 2 else "NG"
+    history_counts = metrics.groupby("ticker")["fiscal_year"].nunique() if not metrics.empty and "fiscal_year" in metrics.columns else pd.Series(dtype=int)
+    three_period_ok = "OK" if len(history_counts) >= max(1, len(companies)) and bool((history_counts >= 3).all()) else "NG"
+    plus_alpha_ok = _plus_alpha_overall_status(plus_alpha_status)
+    source_ok = "OK" if edinet_filings is not None and not edinet_filings.empty else ("候補" if not metrics.empty else "NG")
+    if table_ok == "OK" and graph_ok == "OK" and two_company_ok == "OK" and three_period_ok == "OK" and plus_alpha_ok in {"OK", "一部"} and source_ok == "OK":
+        overall = "提出候補"
+    elif table_ok == "OK" and graph_ok == "OK":
+        overall = "診断レポート"
+    else:
+        overall = "草稿"
+    return pd.DataFrame(
+        [
+            {"確認項目": "表あり", "状態": table_ok, "判定メモ": "主要表を生成"},
+            {"確認項目": "グラフあり", "状態": graph_ok, "判定メモ": "財務グラフまたは診断グラフを挿入"},
+            {"確認項目": "2社財務比較", "状態": two_company_ok, "判定メモ": "主要5項目が2社以上で揃うか"},
+            {"確認項目": "3期推移", "状態": three_period_ok, "判定メモ": "選択企業ごとに3期以上あるか"},
+            {"確認項目": "＋α実施", "状態": plus_alpha_ok, "判定メモ": "実施済み、一部実施、未実施を分離"},
+            {"確認項目": "出典確認", "状態": source_ok, "判定メモ": "EDINET書類メタデータの有無"},
+            {"確認項目": "総合判定", "状態": overall, "判定メモ": "提出前に一次資料と文章の整合確認が必要"},
+        ]
+    )
+
+
+def _industry_missing_data_candidates(companies: pd.DataFrame) -> pd.DataFrame:
+    analysis_policy = load_analysis_policy()
+    text = " ".join(
+        companies[[column for column in ["jpx_industry", "broad_sector", "business_theme", "business_summary"] if column in companies.columns]]
+        .fillna("")
+        .astype(str)
+        .agg(" ".join, axis=1)
+        .tolist()
+    )
+    rows: list[dict[str, str]] = []
+    for name, config in analysis_policy.get("industry_lenses", {}).items():
+        keywords = [str(keyword) for keyword in config.get("keywords", [])]
+        if not any(keyword and keyword in text for keyword in keywords):
+            continue
+        missing_data = config.get("missing_data_candidates", [])
+        if not missing_data:
+            continue
+        rows.append(
+            {
+                "業種レンズ": str(name),
+                "不足データ候補": "、".join(str(item) for item in missing_data),
+                "用途": str(config.get("note", "")),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _outlier_notes(metrics: pd.DataFrame) -> list[str]:
+    latest = _latest_with_company(metrics)
+    notes: list[str] = []
+    for _, row in latest.iterrows():
+        flagged = [
+            OUTLIER_LABELS[column]
+            for column in OUTLIER_LIMITS
+            if column in latest.columns and _is_outlier_value(row.get(column), column)
+        ]
+        if flagged:
+            notes.append(
+                f"{row.get('company_name', row.get('ticker', ''))}の{', '.join(flagged)}は異常値候補です。"
+                "分析スコアには使わず、単位・スケール確認が必要です。"
+            )
+    return notes
 
 
 def _write_report(
@@ -199,6 +405,7 @@ def _write_report(
     alpha_table = build_alpha_commentary(latest, missing_label)
     framework_table = build_required_plus_alpha_table()
     plus_alpha_table = build_plus_alpha_analysis_table(metrics, companies, missing_label=missing_label)
+    plus_alpha_status_table = build_plus_alpha_status_table(metrics, missing_label=missing_label)
     dupont_table = build_dupont_driver_table(metrics, missing_label)
     profit_bridge_table = build_profit_bridge_table(metrics, missing_label)
     sensitivity_table = build_sensitivity_risk_table(metrics, missing_label=missing_label)
@@ -210,6 +417,16 @@ def _write_report(
         missing_label=missing_label,
     )
     missing_notes = collect_missing_notes(metrics, missing_label)
+    missing_notes.extend(_outlier_notes(metrics))
+    completion_table = _completion_score_table(
+        metrics=metrics,
+        companies=companies,
+        chart_paths=chart_paths,
+        plus_alpha_status=plus_alpha_status_table,
+        edinet_filings=edinet_filings,
+    )
+    missing_data_table = _missing_data_table(metrics, missing_label)
+    industry_missing_table = _industry_missing_data_candidates(companies)
 
     document = Document()
     _set_document_style(document)
@@ -220,11 +437,20 @@ def _write_report(
     _add_paragraph(document, f"業種判定モード: {industry_mode}", rubric)
     _add_paragraph(document, f"作成日: {as_of.isoformat()}", rubric)
     _add_paragraph(document, "本レポートは学習目的の比較分析であり、株式取引の推奨を目的としない。", rubric)
+    if app_mode == "manual_custom":
+        _add_paragraph(
+            document,
+            "manual_custom（手動比較）では、上場日、上場後年数、業種一致、除外業種は参考判定です。"
+            "これらは比較テーマの妥当性を確認する補助情報であり、レポート生成の強制条件ではありません。",
+            rubric,
+        )
 
     document.add_heading("課題対応表", level=1)
     _add_df_table(document, assignment_table, missing_label)
 
     document.add_heading("条件適合表", level=1)
+    if app_mode == "manual_custom":
+        _add_paragraph(document, "手動比較のため、この表は参考判定です。NGや警告があっても生成自体は可能です。", rubric)
     _add_df_table(document, assignment_result["condition_table"], missing_label)
     document.add_paragraph("企業別判定")
     _add_df_table(document, assignment_result["company_check_table"], missing_label)
@@ -284,7 +510,15 @@ def _write_report(
         "cash_flow_operating": "営業CF",
         "fcf": "FCF",
     }
+    core_message = _core_financial_comparison_message(metrics)
+    if core_message:
+        _add_paragraph(document, core_message, rubric)
     _add_df_table(document, _display_table(metrics, financial_columns, financial_labels, missing_label), missing_label)
+    if missing_data_table.astype(str).apply(lambda column: column.str.contains(missing_label, regex=False)).any().any() or (
+        "不足データ" in missing_data_table.columns and (missing_data_table["不足データ"] != "なし").any()
+    ):
+        document.add_paragraph("不足データ一覧")
+        _add_df_table(document, missing_data_table, missing_label)
 
     document.add_heading("財務指標表", level=1)
     metric_columns = [
@@ -320,17 +554,21 @@ def _write_report(
         "valuation_reference_score",
         "analysis_quality_score",
         "analysis_band",
+        "outlier_flags",
     ]
     score_labels = {
         "ticker": "証券コード",
         "company_name": "企業名",
         "fiscal_year": "年度",
         **SCORE_LABELS,
+        "outlier_flags": "異常値候補",
     }
     score_columns = [column for column in score_columns if column in quality_scores.columns]
     _add_df_table(document, _display_table(quality_scores, score_columns, score_labels, missing_label), missing_label)
     for note in build_scoring_notes(quality_scores, missing_label):
         _add_paragraph(document, note, rubric)
+    document.add_paragraph("手動モード用完成度スコア")
+    _add_df_table(document, completion_table, missing_label)
 
     document.add_heading("高度判定・考察", level=1)
     _add_df_table(document, advanced["diagnostic_table"], missing_label)
@@ -342,6 +580,8 @@ def _write_report(
             _add_paragraph(document, f"・{note}", rubric)
 
     document.add_heading("高度アルゴリズム分析", level=1)
+    document.add_paragraph("＋α分析の実施状態")
+    _add_df_table(document, plus_alpha_status_table, missing_label)
     document.add_paragraph("ROE要因分解")
     _add_df_table(document, dupont_table, missing_label)
     document.add_paragraph("営業利益ブリッジ")
@@ -358,7 +598,12 @@ def _write_report(
         "roa_roe_trend": "ROA/ROE推移",
         "equity_ratio_trend": "自己資本比率推移",
         "cashflow_fcf_trend": "営業CF/FCF推移",
+        "data_completeness_diagnostic": "診断グラフ: データ充足率",
+        "missing_items_diagnostic": "診断グラフ: 企業別欠損項目数",
+        "cashflow_items_diagnostic": "診断グラフ: 取得済みCF項目",
     }
+    if not _has_financial_chart_data(metrics):
+        _add_paragraph(document, "比較グラフ不可: 財務比較に必要な系列データが不足しています。代わりに診断グラフを挿入します。", rubric)
     for slug, path in chart_paths.items():
         document.add_paragraph(chart_titles.get(slug, slug))
         if path.exists():
@@ -384,6 +629,9 @@ def _write_report(
     _add_df_table(document, alpha_table, missing_label)
     document.add_paragraph("講義手法に基づく＋α詳細")
     _add_df_table(document, plus_alpha_table, missing_label)
+    if not industry_missing_table.empty:
+        document.add_paragraph("業種別の不足データ候補")
+        _add_df_table(document, industry_missing_table, missing_label)
 
     document.add_heading("総合比較", level=1)
     _add_paragraph(
@@ -513,6 +761,7 @@ def build_report_package(
     )
 
     missing_notes = collect_missing_notes(metrics, _missing_label(rubric))
+    missing_notes.extend(_outlier_notes(metrics))
     return ReportPackage(
         docx_path=docx_path,
         chart_paths=chart_paths,

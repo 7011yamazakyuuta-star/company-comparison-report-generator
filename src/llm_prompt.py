@@ -18,6 +18,7 @@ from .config_loader import load_industry_policy, load_rubric
 from .course_framework import (
     build_plus_alpha_analysis_table,
     build_plus_alpha_commentary,
+    build_plus_alpha_status_table,
     build_required_plus_alpha_table,
 )
 from .data_loader import Dataset
@@ -146,6 +147,10 @@ def build_llm_report_prompt(
         selected_companies,
         missing_label=rubric["assignment"]["missing_value_label"],
     )
+    plus_alpha_status_table = build_plus_alpha_status_table(
+        metrics,
+        missing_label=rubric["assignment"]["missing_value_label"],
+    )
     plus_alpha_comments = build_plus_alpha_commentary(
         plus_alpha_table,
         rubric["assignment"]["missing_value_label"],
@@ -201,6 +206,7 @@ def build_llm_report_prompt(
 - アプリモード: {app_mode}
 - 業種判定モード: {industry_mode}
 - 比較テーマ: {preset.get("comparison_theme", "")}
+- manual_custom（手動比較）の場合、上場日・業種一致・除外業種は参考判定であり、強制条件ではありません。
 
 ## データソースとEDINET反映状況
 - 財務指標の数値: EDINET取得・解析済みデータとデータソース監査表を優先してください。
@@ -248,6 +254,9 @@ def build_llm_report_prompt(
 
 ## ＋α分析テーブル
 {_markdown_table(plus_alpha_table)}
+
+## ＋α分析の実施状態
+{_markdown_table(plus_alpha_status_table)}
 
 ## ＋α分析メモ
 {_bullet(plus_alpha_comments)}

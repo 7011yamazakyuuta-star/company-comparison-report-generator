@@ -80,6 +80,7 @@ from src.report_writer import build_report_package
 APP_MODE_LABELS = {
     "assignment": "課題モード",
     "general": "汎用モード",
+    "manual_custom": "manual_custom（手動比較）",
 }
 
 WORKFLOW_MODE_LABELS = {
@@ -2862,14 +2863,14 @@ def _make_custom_preset(
     theme_label = " / ".join(themes[:3]) if themes else "自由選択"
     return {
         "preset_id": "custom_selection",
-        "name": "自由選択",
+        "name": "手動比較",
         "description": "証券コード、企業名、業種、事業テーマ検索から選んだ企業を比較します。",
         "companies": selected_tickers,
         "industry_mode": industry_mode,
         "default_app_mode": app_mode,
         "comparison_theme": theme_label,
         "expected_warnings": [],
-        "notes": ["検索で選んだカスタム比較です。課題モードでは条件チェック結果を確認してください。"],
+        "notes": ["検索で選んだ手動比較です。上場日や業種条件は参考判定であり、強制条件ではありません。"],
     }
 
 
@@ -4111,6 +4112,7 @@ def main() -> None:
             industry_mode=industry_mode,
         )
         preset_id = "custom_selection"
+    report_app_mode = "manual_custom" if manual_override else app_mode
 
     selected_companies = select_companies(dataset.company_master, selected_tickers)
     analysis_source_mode = (
@@ -4126,7 +4128,7 @@ def main() -> None:
     analysis_dataset = prepared_analysis.dataset
     preview = check_assignment_conditions(
         selected_companies,
-        app_mode=app_mode,
+        app_mode=report_app_mode,
         industry_mode=industry_mode,
         rubric=rubric,
         industry_policy=industry_policy,
@@ -4139,7 +4141,7 @@ def main() -> None:
             preset_id=preset_id,
             preset=preset,
             presets=presets,
-            app_mode=app_mode,
+            app_mode=report_app_mode,
             industry_mode=industry_mode,
             selected_tickers=selected_tickers,
             selected_companies=selected_companies,
@@ -4155,7 +4157,7 @@ def main() -> None:
             preset_id=preset_id,
             preset=preset,
             selected_companies=selected_companies,
-            app_mode=app_mode,
+            app_mode=report_app_mode,
             industry_mode=industry_mode,
             industry_policy=industry_policy,
             warnings=warning_list,
@@ -4195,7 +4197,7 @@ def main() -> None:
             _render_section_intro(
                 "Assignment check",
                 "課題条件の確認",
-                "大学課題モードでは、上場日、上場後年数、業種一致、除外業種をYAMLの条件に沿って確認します。",
+                "手動比較では参考判定として、課題モードでは強制条件として、上場日・業種一致・除外業種を確認します。",
             )
             _show_condition_warnings(warning_list)
             st.dataframe(preview["condition_table"], use_container_width=True, hide_index=True)
@@ -4216,7 +4218,7 @@ def main() -> None:
                     report_metrics_preview,
                     selected_companies,
                     str(rubric["assignment"]["missing_value_label"]),
-                    app_mode=app_mode,
+                    app_mode=report_app_mode,
                     industry_mode=industry_mode,
                 )
 
@@ -4229,7 +4231,7 @@ def main() -> None:
                         package = build_report_package(
                             selected_tickers=selected_tickers,
                             preset={**preset, "preset_id": preset_id},
-                            app_mode=app_mode,
+                            app_mode=report_app_mode,
                             industry_mode=industry_mode,
                             dataset=report_prepared.dataset,
                             as_of=date.today(),
@@ -4285,18 +4287,18 @@ def main() -> None:
                                 selected_tickers=selected_tickers,
                                 preset_id=preset_id,
                                 preset=preset,
-                                app_mode=app_mode,
+                                app_mode=report_app_mode,
                                 industry_mode=industry_mode,
                                 dataset=prompt_prepared.dataset,
                                 data_source_audit=build_data_source_audit(prompt_prepared.source_summary),
                             )
                         st.session_state.detail_prompt_bundle = {
-                            "signature": f"{preset_id}:{app_mode}:{industry_mode}:{','.join(selected_tickers)}",
+                            "signature": f"{preset_id}:{report_app_mode}:{industry_mode}:{','.join(selected_tickers)}",
                             "file_name": prompt_file_name,
                             "text": prompt_text,
                         }
                 prompt_bundle = st.session_state.get("detail_prompt_bundle")
-                prompt_signature = f"{preset_id}:{app_mode}:{industry_mode}:{','.join(selected_tickers)}"
+                prompt_signature = f"{preset_id}:{report_app_mode}:{industry_mode}:{','.join(selected_tickers)}"
                 if prompt_bundle and prompt_bundle.get("signature") == prompt_signature:
                     _render_llm_prompt_panel(
                         file_name=str(prompt_bundle["file_name"]),

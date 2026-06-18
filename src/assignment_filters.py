@@ -28,6 +28,8 @@ def check_assignment_conditions(
     company_rows: list[dict[str, str]] = []
     warnings: list[str] = []
     notes: list[str] = []
+    is_assignment_mode = app_mode == "assignment"
+    is_manual_custom = app_mode == "manual_custom"
 
     count_ok = len(companies) >= min_companies
     rows.append(
@@ -59,26 +61,38 @@ def check_assignment_conditions(
     listing_ok = all(bool(result["listing_ok"]) for result in listing_results)
     rows.append(
         {
-            "条件": f"{assignment['listing_on_or_after']}以降に上場、かつ{min_years_label}",
+            "条件": (
+                f"参考判定: {assignment['listing_on_or_after']}以降に上場、かつ{min_years_label}"
+                if is_manual_custom
+                else f"{assignment['listing_on_or_after']}以降に上場、かつ{min_years_label}"
+            ),
             "判定": _status(listing_ok),
-            "詳細": "企業別判定表を参照",
+            "詳細": "手動比較では強制条件ではありません。企業別判定表を参照。"
+            if is_manual_custom
+            else "企業別判定表を参照",
         }
     )
     if not listing_ok:
-        warnings.append("上場日または上場後年数の条件を満たさない企業があります。")
+        prefix = "参考警告: " if is_manual_custom else ""
+        warnings.append(f"{prefix}上場日または上場後年数の条件を満たさない企業があります。")
 
     industry_result = evaluate_industry_mode(companies, industry_mode, industry_policy, app_mode)
     rows.append(
         {
-            "条件": "同じ業種から2社以上",
+            "条件": "参考判定: 同じ業種から2社以上" if is_manual_custom else "同じ業種から2社以上",
             "判定": str(industry_result["status"]),
-            "詳細": " / ".join(industry_result["notes"]),
+            "詳細": (
+                "手動比較では強制条件ではありません。"
+                + (" / " + " / ".join(industry_result["notes"]) if industry_result["notes"] else "")
+                if is_manual_custom
+                else " / ".join(industry_result["notes"])
+            ),
         }
     )
     warnings.extend(str(w) for w in industry_result["warnings"])
 
     exclusion_ok = True
-    if app_mode == "assignment":
+    if is_assignment_mode:
         excluded = excluded_companies(companies, industry_policy)
         exclusion_ok = excluded.empty
         rows.append(
@@ -90,6 +104,15 @@ def check_assignment_conditions(
         )
         if not exclusion_ok:
             warnings.append("課題モードの除外業種に該当する企業があります。")
+    elif is_manual_custom:
+        rows.append(
+            {
+                "条件": "参考判定: 除外業種の扱い",
+                "判定": "OK",
+                "詳細": "手動比較のため、金融・医療なども強制除外しない",
+            }
+        )
+        notes.append("manual_custom（手動比較）では上場日、業種一致、除外業種は参考判定です。レポート生成は可能です。")
     else:
         rows.append(
             {
@@ -100,7 +123,10 @@ def check_assignment_conditions(
         )
 
     warning_only = any(row["判定"] == "警告" for row in rows)
-    passed = count_ok and listing_ok and exclusion_ok and not any(row["判定"] == "NG" for row in rows)
+    if is_manual_custom:
+        passed = count_ok
+    else:
+        passed = count_ok and listing_ok and exclusion_ok and not any(row["判定"] == "NG" for row in rows)
     if warning_only and passed:
         notes.append("警告付きでレポート生成可能です。課題提出時は担当教員の条件確認を推奨します。")
 

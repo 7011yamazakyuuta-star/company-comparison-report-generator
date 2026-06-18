@@ -135,6 +135,7 @@ def prepare_analysis_dataset(
     *,
     source_mode: str = DATA_SOURCE_SAMPLE,
     edinet_rows: pd.DataFrame | None = None,
+    allow_sample_fallback: bool = True,
 ) -> PreparedAnalysisDataset:
     clean_tickers = [str(ticker).strip() for ticker in selected_tickers if str(ticker).strip()]
     if source_mode != DATA_SOURCE_EDINET_OVERLAY:
@@ -145,12 +146,27 @@ def prepare_analysis_dataset(
             edinet_rows=pd.DataFrame(),
         )
 
+    base_financials = normalize_ticker_column(dataset.financials.copy())
+    base_columns = list(base_financials.columns)
+
     loaded_edinet_rows = (
         edinet_rows.copy()
         if edinet_rows is not None
         else load_edinet_financial_rows(tickers=clean_tickers)
     )
     if loaded_edinet_rows.empty:
+        if not allow_sample_fallback:
+            prepared = Dataset(
+                company_master=dataset.company_master,
+                financials=base_financials.iloc[0:0].copy(),
+                market_data=dataset.market_data.iloc[0:0].copy(),
+                manual_kpis=dataset.manual_kpis.iloc[0:0].copy(),
+            )
+            return PreparedAnalysisDataset(
+                dataset=prepared,
+                source_summary=_empty_summary(),
+                edinet_rows=loaded_edinet_rows,
+            )
         sample_rows = dataset.financials[dataset.financials["ticker"].isin(clean_tickers)].copy()
         return PreparedAnalysisDataset(
             dataset=dataset,
@@ -158,14 +174,37 @@ def prepare_analysis_dataset(
             edinet_rows=loaded_edinet_rows,
         )
 
-    base_financials = normalize_ticker_column(dataset.financials.copy())
-    base_columns = list(base_financials.columns)
     aligned_edinet = _align_edinet_rows(loaded_edinet_rows, base_columns)
     if aligned_edinet.empty:
+        if not allow_sample_fallback:
+            prepared = Dataset(
+                company_master=dataset.company_master,
+                financials=base_financials.iloc[0:0].copy(),
+                market_data=dataset.market_data.iloc[0:0].copy(),
+                manual_kpis=dataset.manual_kpis.iloc[0:0].copy(),
+            )
+            return PreparedAnalysisDataset(
+                dataset=prepared,
+                source_summary=_empty_summary(),
+                edinet_rows=loaded_edinet_rows,
+            )
         sample_rows = dataset.financials[dataset.financials["ticker"].isin(clean_tickers)].copy()
         return PreparedAnalysisDataset(
             dataset=dataset,
             source_summary=_summarize_rows(sample_rows, source="sample_csv"),
+            edinet_rows=loaded_edinet_rows,
+        )
+
+    if not allow_sample_fallback:
+        prepared = Dataset(
+            company_master=dataset.company_master,
+            financials=aligned_edinet[base_columns].sort_values(["ticker", "fiscal_year"]).reset_index(drop=True),
+            market_data=dataset.market_data.iloc[0:0].copy(),
+            manual_kpis=dataset.manual_kpis.iloc[0:0].copy(),
+        )
+        return PreparedAnalysisDataset(
+            dataset=prepared,
+            source_summary=_summarize_rows(aligned_edinet, source="edinet_candidate"),
             edinet_rows=loaded_edinet_rows,
         )
 

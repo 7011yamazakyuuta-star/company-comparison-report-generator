@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import base64
+from io import BytesIO
 from dataclasses import dataclass
 from datetime import date, timedelta
 from html import escape
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import pandas as pd
 import streamlit as st
@@ -18,7 +20,6 @@ from src.analysis_engine import (
 )
 from src.analysis_dataset import (
     DATA_SOURCE_EDINET_OVERLAY,
-    DATA_SOURCE_SAMPLE,
     PreparedAnalysisDataset,
     build_data_source_audit,
     prepare_analysis_dataset,
@@ -30,7 +31,7 @@ from src.course_framework import build_plus_alpha_analysis_table, build_required
 from src.data_loader import DEFAULT_DB_PATH, load_dataset
 from src.edinet_client import EdinetApiError, EdinetClient, extract_document_rows
 from src.edinet_company_directory import overlay_dataset_company_master
-from src.edinet_files import save_raw_document
+from src.edinet_files import RAW_FILINGS_DIR, save_raw_document
 from src.edinet_lookup import fetch_document_rows_for_tickers, sec_code_candidates
 try:
     from src.edinet_lookup import fetch_document_rows_in_period
@@ -245,6 +246,25 @@ def _apply_style() -> None:
         body:has(.workflow-mode-auto) [data-testid="stMain"],
         body:has(.workflow-mode-auto) section.main {
             margin-left: 0 !important;
+        }
+        body:has(.workflow-mode-detail) section[data-testid="stSidebar"],
+        body:has(.workflow-mode-detail) [data-testid="stSidebar"] {
+            display: block !important;
+            visibility: visible !important;
+            width: 22rem !important;
+            min-width: 22rem !important;
+            max-width: 22rem !important;
+            transform: translateX(0) !important;
+            margin-left: 0 !important;
+            opacity: 1 !important;
+        }
+        body:has(.workflow-mode-detail) [data-testid="stSidebarContent"],
+        body:has(.workflow-mode-detail) [data-testid="stSidebarUserContent"] {
+            display: block !important;
+            visibility: visible !important;
+            width: 22rem !important;
+            min-width: 22rem !important;
+            opacity: 1 !important;
         }
         div[data-testid="stSidebar"] {
             background: var(--app-surface-soft);
@@ -1820,8 +1840,8 @@ def _render_app_header() -> None:
                 質問に答えるだけで、提出用のたたき台まで進めます。
             </p>
             <div class="store-strip">
-                <div class="store-chip">サンプルCSV対応</div>
-                <div class="store-chip">EDINET取得対応</div>
+                <div class="store-chip">EDINETデータ優先</div>
+                <div class="store-chip">取得データDL対応</div>
                 <div class="store-chip">Wordレポート生成</div>
             </div>
         </div>
@@ -2435,7 +2455,7 @@ def _render_report_edinet_status(preflight: ReportEdinetPreflight, selected_tick
         st.info("EDINET_API_KEYが未設定のため、Word生成前の自動EDINET確認はスキップされます。")
         return
     if preflight.filings.empty:
-        st.caption("Word生成時にEDINET書類一覧も確認します。見つからない場合はサンプルCSV中心で作成します。")
+        st.caption("EDINET書類一覧は見つかりませんでした。取得済みデータがない項目は欠損注記として扱います。")
         return
     st.success(f"EDINET書類メタデータを{len(preflight.filings)}件確認しました。")
     st.dataframe(
@@ -2461,6 +2481,74 @@ def _run_report_edinet_preflight(selected_tickers: list[str]) -> ReportEdinetPre
     except Exception as exc:  # pragma: no cover - Streamlit safety net
         st.warning(f"EDINET自動確認中に予期しないエラーがありました: {exc}")
     return ReportEdinetPreflight(filings=pd.DataFrame(), financial_rows=pd.DataFrame(), messages=[], warnings=[])
+
+
+def _prepare_edinet_analysis_for_selection(dataset, selected_tickers: list[str]) -> tuple[ReportEdinetPreflight, PreparedAnalysisDataset]:
+    preflight = _run_report_edinet_preflight(selected_tickers)
+    prepared = prepare_analysis_dataset(
+        dataset,
+        selected_tickers,
+        source_mode=DATA_SOURCE_EDINET_OVERLAY,
+        edinet_rows=preflight.financial_rows,
+        allow_sample_fallback=False,
+    )
+    return preflight, prepared
+
+
+def _filter_edinet_facts_by_tickers(tickers: list[str]) -> pd.DataFrame:
+    facts = load_extracted_facts()
+    if facts.empty or "ticker" not in facts.columns:
+        return facts
+    clean_tickers = {str(ticker).strip() for ticker in tickers if str(ticker).strip()}
+    return facts[facts["ticker"].astype(str).isin(clean_tickers)].reset_index(drop=True)
+
+
+def _write_csv_to_zip(zip_file: ZipFile, name: str, frame: pd.DataFrame) -> None:
+    zip_file.writestr(name, frame.to_csv(index=False).encode("utf-8-sig"))
+
+
+def _build_edinet_export_zip(
+    *,
+    selected_tickers: list[str],
+    selected_companies: pd.DataFrame,
+    preflight: ReportEdinetPreflight,
+    prepared: PreparedAnalysisDataset,
+) -> tuple[str, bytes]:
+    buffer = BytesIO()
+    audit_table = build_data_source_audit(prepared.source_summary)
+    facts = _filter_edinet_facts_by_tickers(selected_tickers)
+    financial_rows = prepared.edinet_rows
+    if financial_rows.empty:
+        financial_rows = load_edinet_financial_rows(tickers=selected_tickers)
+    readme = (
+        "EDINET export for company comparison report generator\n"
+        f"created_at,{date.today().isoformat()}\n"
+        f"tickers,{','.join(selected_tickers)}\n\n"
+        "files:\n"
+        "- selected_companies.csv: selected company master rows\n"
+        "- edinet_filings.csv: EDINET document metadata found for selected tickers\n"
+        "- edinet_financial_rows.csv: normalized financial rows extracted from EDINET CSV ZIP files\n"
+        "- edinet_facts.csv: extracted raw financial tag candidates\n"
+        "- data_source_audit.csv: coverage status used by the app\n\n"
+        "Note: This export is source material for review and drafting. It is not investment advice.\n"
+    )
+    with ZipFile(buffer, "w", ZIP_DEFLATED) as zip_file:
+        zip_file.writestr("README.txt", readme.encode("utf-8"))
+        _write_csv_to_zip(zip_file, "selected_companies.csv", selected_companies)
+        _write_csv_to_zip(zip_file, "edinet_filings.csv", preflight.filings)
+        _write_csv_to_zip(zip_file, "edinet_financial_rows.csv", financial_rows)
+        _write_csv_to_zip(zip_file, "edinet_facts.csv", facts)
+        _write_csv_to_zip(zip_file, "data_source_audit.csv", audit_table)
+        if not preflight.filings.empty and "doc_id" in preflight.filings.columns:
+            for doc_id in preflight.filings["doc_id"].dropna().astype(str).unique():
+                raw_dir = RAW_FILINGS_DIR / doc_id
+                if not raw_dir.exists():
+                    continue
+                for raw_path in raw_dir.iterdir():
+                    if raw_path.is_file():
+                        zip_file.write(raw_path, arcname=f"raw_filings/{doc_id}/{raw_path.name}")
+    file_name = f"edinet_export_{'_'.join(selected_tickers)}_{date.today().isoformat()}.zip"
+    return file_name, buffer.getvalue()
 
 
 def _company_preview_table(company_master: pd.DataFrame, tickers: list[str]) -> pd.DataFrame:
@@ -2733,30 +2821,29 @@ def _compute_metrics_for_selection(dataset, selected_tickers: list[str]) -> pd.D
 
 def _render_analysis_data_source_panel(prepared: PreparedAnalysisDataset) -> None:
     st.markdown("**分析データ**")
-    st.caption("通常はサンプルCSVを使います。EDINET候補は抽出済みデータの検証用で、欠損がある場合は慎重に確認してください。")
-    mode_options = [DATA_SOURCE_SAMPLE, DATA_SOURCE_EDINET_OVERLAY]
-    if st.session_state.get("analysis_data_source_mode") not in mode_options:
-        st.session_state.analysis_data_source_mode = DATA_SOURCE_SAMPLE
-    selected = st.segmented_control(
-        "分析データ",
-        options=mode_options,
-        required=True,
-        format_func=lambda value: "EDINET候補を優先" if value == DATA_SOURCE_EDINET_OVERLAY else "サンプルCSV",
-        key="analysis_data_source_mode",
-        label_visibility="collapsed",
-        width="stretch",
+    st.session_state.analysis_data_source_mode = DATA_SOURCE_EDINET_OVERLAY
+    st.caption(
+        "この画面ではEDINETから取得・解析したデータを優先します。"
+        "未取得または欠損がある項目は、監査表とWordレポートの欠損注記で確認できます。"
     )
-    if selected == DATA_SOURCE_EDINET_OVERLAY and prepared.edinet_rows.empty:
-        st.info("保存済みEDINET抽出候補はまだありません。EDINET取得タブでCSV ZIPを取得・解析すると候補が表示されます。")
-    elif selected == DATA_SOURCE_EDINET_OVERLAY:
-        st.info("同じ証券コード・年度のEDINET候補がある場合だけ、サンプルCSVより優先します。欠損値はレポート上で注記対象です。")
+    if prepared.edinet_rows.empty:
+        st.info("まだ保存済みのEDINET財務行がありません。Word生成、プロンプト生成、EDINET取得データDLの実行時に選択企業のEDINET確認を行います。")
+    else:
+        st.success(f"保存済みEDINET財務行を{len(prepared.edinet_rows)}件確認しました。")
 
     if not prepared.source_summary.empty:
         audit_table = build_data_source_audit(prepared.source_summary)
         if not audit_table.empty:
             st.markdown("**データ監査**")
+            audit_display = audit_table.copy()
+            audit_display["data_source"] = audit_display["data_source"].replace(
+                {
+                    "sample_csv": "補助データ（EDINET未取得）",
+                    "edinet_candidate": "EDINET取得データ",
+                }
+            )
             st.dataframe(
-                audit_table.rename(
+                audit_display.rename(
                     columns={
                         "ticker": "証券コード",
                         "fiscal_year": "年度",
@@ -2771,8 +2858,15 @@ def _render_analysis_data_source_panel(prepared: PreparedAnalysisDataset) -> Non
                 hide_index=True,
             )
         st.markdown("**データソース詳細**")
+        source_display = prepared.source_summary.copy()
+        source_display["data_source"] = source_display["data_source"].replace(
+            {
+                "sample_csv": "補助データ（EDINET未取得）",
+                "edinet_candidate": "EDINET取得データ",
+            }
+        )
         st.dataframe(
-            prepared.source_summary.rename(
+            source_display.rename(
                 columns={
                     "ticker": "証券コード",
                     "fiscal_year": "年度",
@@ -3126,31 +3220,14 @@ def _render_auto_mode(
             industry_mode=industry_mode,
         )
 
-    prompt_file_name = ""
-    prompt_text = ""
     prompt_ready = len(selected_tickers) >= int(rubric["assignment"]["min_companies"])
-    if prompt_ready:
-        prompt_file_name, prompt_text = _build_prompt_download(
-            selected_tickers=selected_tickers,
-            preset_id=preset_id,
-            preset=preset,
-            app_mode=app_mode,
-            industry_mode=industry_mode,
-            dataset=dataset,
-        )
 
     actions = st.columns([1.2, 1, 1])
     with actions[0]:
         disabled = len(selected_tickers) < int(rubric["assignment"]["min_companies"])
         if st.button("Wordレポートを作成", type="primary", disabled=disabled, width="stretch", key="wizard_generate_report"):
-            with st.spinner("レポートを作成しています..."):
-                preflight = _run_report_edinet_preflight(selected_tickers)
-                report_prepared = prepare_analysis_dataset(
-                    dataset,
-                    selected_tickers,
-                    source_mode=DATA_SOURCE_EDINET_OVERLAY,
-                    edinet_rows=preflight.financial_rows,
-                )
+            with st.spinner("EDINETを確認し、Wordレポートを作成しています..."):
+                preflight, report_prepared = _prepare_edinet_analysis_for_selection(dataset, selected_tickers)
                 package = build_report_package(
                     selected_tickers=selected_tickers,
                     preset={**preset, "preset_id": preset_id},
@@ -3177,13 +3254,58 @@ def _render_auto_mode(
             _set_state_and_rerun(wizard_step=2, wizard_industry_choice=None)
     with actions[2]:
         if st.button("詳細設定を開く", width="stretch", key="wizard_open_detail"):
-            _set_state_and_rerun(workflow_mode_pending="detail")
+            _set_state_and_rerun(workflow_mode_pending="detail", request_open_settings_sidebar=True)
     if prompt_ready:
-        _render_llm_prompt_panel(
-            file_name=prompt_file_name,
-            prompt_text=prompt_text,
-            key_prefix="wizard",
-        )
+        if st.button("プロンプトを生成", width="stretch", key="wizard_generate_prompt"):
+            with st.spinner("EDINETを確認し、LLM用プロンプトを作成しています..."):
+                preflight, prompt_prepared = _prepare_edinet_analysis_for_selection(dataset, selected_tickers)
+                prompt_file_name, prompt_text = _build_prompt_download(
+                    selected_tickers=selected_tickers,
+                    preset_id=preset_id,
+                    preset=preset,
+                    app_mode=app_mode,
+                    industry_mode=industry_mode,
+                    dataset=prompt_prepared.dataset,
+                    data_source_audit=build_data_source_audit(prompt_prepared.source_summary),
+                )
+            st.session_state.wizard_prompt_bundle = {
+                "signature": f"{preset_id}:{app_mode}:{industry_mode}:{','.join(selected_tickers)}",
+                "file_name": prompt_file_name,
+                "text": prompt_text,
+            }
+        wizard_signature = f"{preset_id}:{app_mode}:{industry_mode}:{','.join(selected_tickers)}"
+        prompt_bundle = st.session_state.get("wizard_prompt_bundle")
+        if prompt_bundle and prompt_bundle.get("signature") == wizard_signature:
+            _render_llm_prompt_panel(
+                file_name=str(prompt_bundle["file_name"]),
+                prompt_text=str(prompt_bundle["text"]),
+                key_prefix="wizard",
+            )
+
+        if st.button("EDINET取得データをZIPで準備", width="stretch", key="wizard_prepare_edinet_export"):
+            with st.spinner("EDINETを確認し、ダウンロード用ZIPを作成しています..."):
+                preflight, export_prepared = _prepare_edinet_analysis_for_selection(dataset, selected_tickers)
+                export_file_name, export_bytes = _build_edinet_export_zip(
+                    selected_tickers=selected_tickers,
+                    selected_companies=selected_companies,
+                    preflight=preflight,
+                    prepared=export_prepared,
+                )
+            st.session_state.wizard_edinet_export_bundle = {
+                "signature": wizard_signature,
+                "file_name": export_file_name,
+                "bytes": export_bytes,
+            }
+        export_bundle = st.session_state.get("wizard_edinet_export_bundle")
+        if export_bundle and export_bundle.get("signature") == wizard_signature:
+            st.download_button(
+                "EDINETデータZIPをダウンロード",
+                data=export_bundle["bytes"],
+                file_name=str(export_bundle["file_name"]),
+                mime="application/zip",
+                width="stretch",
+                key="wizard_download_edinet_export",
+            )
 
 
 def _render_workspace_summary(
@@ -3441,9 +3563,9 @@ def _render_edinet_panel(selected_companies: pd.DataFrame | None = None) -> None
     col_b.metric("保存先", "SQLite")
     col_c.metric("取得単位", "1日分")
     st.info(
-        "通常表示はサンプルCSVを基準にします。EDINET連携は、証券コードから書類一覧を検索し、"
-        "CSV ZIPの保存、主要財務タグ候補の抽出、Word生成時の候補反映まで対応しています。"
-        "欠損が多い場合はサンプルCSVや注記と照合してください。"
+        "EDINET連携は、証券コードから書類一覧を検索し、CSV ZIPの保存、主要財務タグ候補の抽出、"
+        "Word生成・プロンプト生成・EDINETデータZIP出力に反映します。"
+        "欠損が多い項目は、監査表と欠損注記で確認できます。"
     )
 
     selected_companies = selected_companies if selected_companies is not None else pd.DataFrame()
@@ -3769,7 +3891,7 @@ def main() -> None:
     if "custom_selected_tickers" not in st.session_state:
         st.session_state.custom_selected_tickers = []
     if "analysis_data_source_mode" not in st.session_state:
-        st.session_state.analysis_data_source_mode = DATA_SOURCE_SAMPLE
+        st.session_state.analysis_data_source_mode = DATA_SOURCE_EDINET_OVERLAY
     industry_modes = list(industry_policy["industry_modes"].keys())
     if "industry_mode" not in st.session_state or st.session_state.industry_mode not in industry_modes:
         st.session_state.industry_mode = str(active_preset.get("industry_mode", rubric["assignment"]["default_industry_mode"]))
@@ -3796,6 +3918,10 @@ def main() -> None:
         f'<div class="workflow-mode-marker workflow-mode-{workflow_marker}"></div>',
         unsafe_allow_html=True,
     )
+    previous_workflow_mode = st.session_state.get("_last_workflow_mode")
+    if workflow_mode == "detail" and previous_workflow_mode != "detail":
+        st.session_state.request_open_settings_sidebar = True
+    st.session_state._last_workflow_mode = workflow_mode
     _render_sidebar_launcher(str(workflow_mode))
 
     preset_id = st.session_state.selected_preset_id
@@ -3873,9 +3999,9 @@ def main() -> None:
 
     selected_companies = select_companies(dataset.company_master, selected_tickers)
     analysis_source_mode = (
-        DATA_SOURCE_SAMPLE
+        DATA_SOURCE_EDINET_OVERLAY
         if workflow_mode == "auto"
-        else str(st.session_state.get("analysis_data_source_mode", DATA_SOURCE_SAMPLE))
+        else str(st.session_state.get("analysis_data_source_mode", DATA_SOURCE_EDINET_OVERLAY))
     )
     prepared_analysis = prepare_analysis_dataset(
         dataset,
@@ -3977,79 +4103,118 @@ def main() -> None:
                 app_mode=app_mode,
                 industry_mode=industry_mode,
             )
-            prompt_file_name, prompt_text = _build_prompt_download(
-                selected_tickers=selected_tickers,
-                preset_id=preset_id,
-                preset=preset,
-                app_mode=app_mode,
-                industry_mode=industry_mode,
-                dataset=analysis_dataset,
-                data_source_audit=build_data_source_audit(prepared_analysis.source_summary),
-            )
-        else:
-            prompt_file_name = ""
-            prompt_text = ""
-        generate_clicked = st.button("レポートを生成", type="primary", disabled=disabled, width="stretch")
+
+        generate_clicked = st.button("Wordレポートを生成", type="primary", disabled=disabled, width="stretch", key="detail_generate_report")
+        report_status = st.empty()
+        if generate_clicked:
+            with report_status.container():
+                with st.spinner("EDINETを確認し、Wordレポートを作成しています..."):
+                    preflight, report_prepared = _prepare_edinet_analysis_for_selection(dataset, selected_tickers)
+                    package = build_report_package(
+                        selected_tickers=selected_tickers,
+                        preset={**preset, "preset_id": preset_id},
+                        app_mode=app_mode,
+                        industry_mode=industry_mode,
+                        dataset=report_prepared.dataset,
+                        as_of=date.today(),
+                        edinet_filings=preflight.filings,
+                    )
+                st.success(f"生成しました: {package.docx_path.name}")
+                _render_report_edinet_status(preflight, selected_tickers)
+
+                with package.docx_path.open("rb") as f:
+                    st.download_button(
+                        "Wordをダウンロード",
+                        data=f.read(),
+                        file_name=package.docx_path.name,
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        width="stretch",
+                        key="detail_download_report",
+                    )
+
+                if package.warnings:
+                    st.subheader("警告")
+                    _show_condition_warnings(package.warnings)
+
+                st.subheader("最新年度の主要指標")
+                st.dataframe(_latest_metric_preview(package.metrics), use_container_width=True, hide_index=True)
+
+                st.subheader("分析品質サマリー")
+                st.dataframe(_score_preview_table(package.quality_scores), use_container_width=True, hide_index=True)
+
+                st.subheader("グラフ")
+                columns = st.columns(2)
+                for idx, (slug, path) in enumerate(package.chart_paths.items()):
+                    with columns[idx % 2]:
+                        st.image(str(path), caption=slug, use_container_width=True)
+
+                if package.missing_notes:
+                    st.subheader("欠損データ注記")
+                    for note in package.missing_notes:
+                        st.write(f"- {note}")
+
         st.markdown(
             '<p class="report-note">Word生成はLLMなしの確定出力です。'
-            'LLM用プロンプトはClaudeなどで文章を磨くための草稿依頼です。</p>',
+            'プロンプト生成はEDINET確認後の数値・監査情報をClaudeなどへ渡すための草稿依頼です。</p>',
             unsafe_allow_html=True,
         )
         if not disabled:
-            _render_llm_prompt_panel(
-                file_name=prompt_file_name,
-                prompt_text=prompt_text,
-                key_prefix="detail",
-            )
-        if generate_clicked:
-            with st.spinner("レポートを作成しています..."):
-                preflight = _run_report_edinet_preflight(selected_tickers)
-                report_prepared = prepare_analysis_dataset(
-                    dataset,
-                    selected_tickers,
-                    source_mode=DATA_SOURCE_EDINET_OVERLAY,
-                    edinet_rows=preflight.financial_rows,
+            prompt_clicked = st.button("プロンプトを生成", width="stretch", key="detail_generate_prompt")
+            prompt_status = st.empty()
+            if prompt_clicked:
+                with prompt_status.container():
+                    with st.spinner("EDINETを確認し、LLM用プロンプトを作成しています..."):
+                        preflight, prompt_prepared = _prepare_edinet_analysis_for_selection(dataset, selected_tickers)
+                        prompt_file_name, prompt_text = _build_prompt_download(
+                            selected_tickers=selected_tickers,
+                            preset_id=preset_id,
+                            preset=preset,
+                            app_mode=app_mode,
+                            industry_mode=industry_mode,
+                            dataset=prompt_prepared.dataset,
+                            data_source_audit=build_data_source_audit(prompt_prepared.source_summary),
+                        )
+                    st.session_state.detail_prompt_bundle = {
+                        "signature": f"{preset_id}:{app_mode}:{industry_mode}:{','.join(selected_tickers)}",
+                        "file_name": prompt_file_name,
+                        "text": prompt_text,
+                    }
+            prompt_bundle = st.session_state.get("detail_prompt_bundle")
+            prompt_signature = f"{preset_id}:{app_mode}:{industry_mode}:{','.join(selected_tickers)}"
+            if prompt_bundle and prompt_bundle.get("signature") == prompt_signature:
+                _render_llm_prompt_panel(
+                    file_name=str(prompt_bundle["file_name"]),
+                    prompt_text=str(prompt_bundle["text"]),
+                    key_prefix="detail",
                 )
-                package = build_report_package(
-                    selected_tickers=selected_tickers,
-                    preset={**preset, "preset_id": preset_id},
-                    app_mode=app_mode,
-                    industry_mode=industry_mode,
-                    dataset=report_prepared.dataset,
-                    as_of=date.today(),
-                    edinet_filings=preflight.filings,
-                )
-            st.success(f"生成しました: {package.docx_path.name}")
-            _render_report_edinet_status(preflight, selected_tickers)
 
-            with package.docx_path.open("rb") as f:
+            export_clicked = st.button("EDINET取得データをZIPで準備", width="stretch", key="detail_prepare_edinet_export")
+            export_status = st.empty()
+            if export_clicked:
+                with export_status.container():
+                    with st.spinner("EDINETを確認し、ダウンロード用ZIPを作成しています..."):
+                        preflight, export_prepared = _prepare_edinet_analysis_for_selection(dataset, selected_tickers)
+                        export_file_name, export_bytes = _build_edinet_export_zip(
+                            selected_tickers=selected_tickers,
+                            selected_companies=selected_companies,
+                            preflight=preflight,
+                            prepared=export_prepared,
+                        )
+                    st.session_state.detail_edinet_export_bundle = {
+                        "signature": prompt_signature,
+                        "file_name": export_file_name,
+                        "bytes": export_bytes,
+                    }
+            export_bundle = st.session_state.get("detail_edinet_export_bundle")
+            if export_bundle and export_bundle.get("signature") == prompt_signature:
                 st.download_button(
-                    "Wordをダウンロード",
-                    data=f.read(),
-                    file_name=package.docx_path.name,
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    "EDINETデータZIPをダウンロード",
+                    data=export_bundle["bytes"],
+                    file_name=str(export_bundle["file_name"]),
+                    mime="application/zip",
+                    width="stretch",
+                    key="detail_download_edinet_export",
                 )
-
-            if package.warnings:
-                st.subheader("警告")
-                _show_condition_warnings(package.warnings)
-
-            st.subheader("最新年度の主要指標")
-            st.dataframe(_latest_metric_preview(package.metrics), use_container_width=True, hide_index=True)
-
-            st.subheader("分析品質サマリー")
-            st.dataframe(_score_preview_table(package.quality_scores), use_container_width=True, hide_index=True)
-
-            st.subheader("グラフ")
-            columns = st.columns(2)
-            for idx, (slug, path) in enumerate(package.chart_paths.items()):
-                with columns[idx % 2]:
-                    st.image(str(path), caption=slug, use_container_width=True)
-
-            if package.missing_notes:
-                st.subheader("欠損データ注記")
-                for note in package.missing_notes:
-                    st.write(f"- {note}")
 
     elif detail_section == "edinet":
         _render_edinet_panel(selected_companies=selected_companies)

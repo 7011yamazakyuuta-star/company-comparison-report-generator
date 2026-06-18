@@ -51,7 +51,8 @@ def _plot_lines(
     ax.set_xlabel("年度")
     ax.set_ylabel("％" if percent else "百万円")
     ax.grid(True, alpha=0.25)
-    ax.legend(fontsize=8, loc="best")
+    if plotted:
+        ax.legend(fontsize=8, loc="best")
     fig.tight_layout()
     fig.savefig(output_path, dpi=150)
     plt.close(fig)

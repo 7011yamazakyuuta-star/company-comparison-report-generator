@@ -1,0 +1,168 @@
+diagnostics:
+  data_confidence:
+    high_min: 90
+    medium_min: 70
+  cagr:
+    strong_min: 0.08
+    watch_max: 0.0
+  margin_change:
+    improving_min: 0.01
+    weakening_max: -0.01
+  cash_conversion:
+    strong_min: 1.0
+    watch_max: 0.6
+  fcf_margin:
+    strong_min: 0.05
+    watch_max: 0.0
+  capex_intensity:
+    heavy_min: 0.08
+  equity_ratio:
+    strong_min: 0.45
+    watch_max: 0.25
+  safety_margin:
+    strong_min: 0.20
+    watch_max: 0.05
+
+advanced_algorithms:
+  operating_leverage:
+    high_min: 3.0
+  profit_bridge:
+    material_ratio: 0.01
+  management_issue:
+    strength_score_min: 70
+    weakness_score_max: 35
+    low_data_confidence_max: 70
+
+required_alpha_framework:
+  required:
+    - name: 企業選定
+      description: 企業を2社以上選び、比較対象の妥当性を示す。
+      output: 比較企業一覧、企業選定理由
+    - name: 条件確認
+      description: 上場日、上場後年数、業種一致、除外業種を確認する。
+      output: 課題対応表、条件適合表、警告
+    - name: 事業内容
+      description: 各社の事業内容、業種、比較テーマを説明する。
+      output: 事業内容表、企業分析9視点
+    - name: 主要財務数値比較
+      description: 売上高、利益、資産、自己資本、営業CF、FCFを比較する。
+      output: 主要財務数値表、財務指標表、グラフ
+    - name: 経営状況要約
+      description: 比較から読める経営状況を最後に整理する。
+      output: 総合比較、結論
+  plus_alpha:
+    - name: ROA / ROE分解
+      description: 利益率型、資産回転型、財務レバレッジ型のどこに差があるかを見る。
+      data_columns: [net_margin, asset_turnover, financial_leverage, roa, roe]
+    - name: 損益分岐点分析
+      description: 売上がどこまで落ちると赤字になるか、固定費と変動費から見る。
+      data_columns: [break_even_sales, safety_margin, operating_leverage]
+    - name: 売上増減分析
+      description: 売上増減が客数、単価、店舗数、稼働率などのどこから来たかを考える。
+      data_columns: [revenue, revenue_growth_rate]
+    - name: 利益増減分析
+      description: 原材料費、人件費、家賃、燃油費、為替などが利益に与えた影響を見る。
+      data_columns: [operating_income, operating_margin]
+    - name: 4P / 4C分析
+      description: 商品、価格、立地、販促、顧客便益、顧客負担などから事業を説明する。
+      data_columns: [four_p, four_c]
+    - name: 顧客関係分析
+      description: リピーター、会員制度、ブランド力、常連客などを見る。
+      data_columns: [customer_relationship]
+    - name: バリューチェーン分析
+      description: 調達、物流、店舗、販売、サービスの流れを見る。
+      data_columns: [value_chain_note]
+    - name: FCF分析
+      description: 営業CFから投資負担を差し引き、稼いだ現金が残っているかを見る。
+      data_columns: [cash_flow_operating, capex, fcf]
+    - name: PER / PBR比較
+      description: 市場がその会社をどう評価しているかを補助的に見る。
+      data_columns: [per, pbr]
+    - name: 将来シナリオ分析
+      description: 原材料費、人件費、海外展開、燃油費、為替などの外部環境を考える。
+      data_columns: []
+    - name: 付加価値分析
+      description: 人件費、減価償却費、支払利息、税金などから付加価値配分を見る。
+      data_columns: []
+    - name: 利益処分状況の分析
+      description: 配当、内部留保、自己株式取得など利益の使い方を見る。
+      data_columns: []
+
+modes:
+  assignment:
+    label: 課題モード
+    emphasis:
+      - 条件適合と財務分析を分けて説明する。
+      - JPX業種一致を基本にし、テーマ比較では警告を明記する。
+      - 欠損値は推定不可として扱い、一次資料確認を促す。
+  general:
+    label: 汎用分析
+    emphasis:
+      - 業種や事業モデルの違いを明示して比較する。
+      - 金融、医療なども除外せず、業種別KPIを追加できる前提で扱う。
+      - 投資助言ではなく、事業理解と財務構造の比較に限定する。
+
+industry_lenses:
+  航空:
+    keywords:
+      - 航空
+      - 空運業
+      - 運輸
+    drivers:
+      - 燃油費
+      - 為替
+      - 機材投資
+      - 座席利用率
+      - 外部環境
+    note: 航空会社は燃油費、為替、機材投資、座席利用率、外部環境の影響を財務指標と合わせて確認する。
+  カフェ・外食:
+    keywords:
+      - カフェ
+      - 喫茶
+      - 外食
+      - 小売業
+      - 店舗ビジネス
+    drivers:
+      - 既存店売上
+      - 出店余地
+      - 人件費
+      - 原材料費
+      - FC比率
+    note: カフェ・外食は既存店売上、出店余地、人件費、原材料費、FC比率が営業利益率とCFに影響しやすい。
+  食品小売・卸売:
+    keywords:
+      - 食品
+      - 卸売
+      - 食関連
+    drivers:
+      - 仕入価格
+      - 在庫回転
+      - 物流効率
+      - PB商品
+      - 店舗網
+    note: 食品小売・卸売は仕入価格、在庫回転、物流効率、PB商品、店舗網が資産効率と利益率に影響しやすい。
+  金融:
+    keywords:
+      - 銀行
+      - 証券
+      - 保険
+      - 金融
+    drivers:
+      - 金利
+      - 信用リスク
+      - 自己資本規制
+      - 預貸利ざや
+      - 市場変動
+    note: 金融業は一般事業会社とは指標体系が異なるため、自己資本規制、金利、信用リスク、預貸利ざやなどの専用KPIを追加して扱う。
+  医療・医薬品:
+    keywords:
+      - 医薬品
+      - 医療
+      - ヘルスケア
+    drivers:
+      - 研究開発費
+      - 薬価
+      - 承認リスク
+      - パイプライン
+      - 規制
+    note: 医療・医薬品は研究開発費、薬価、承認リスク、パイプライン、規制の影響を通常の収益性指標と分けて確認する。

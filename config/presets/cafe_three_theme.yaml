@@ -1,0 +1,14 @@
+preset_id: cafe_three_theme
+name: カフェ3社 テーマ比較
+description: コメダHD、ドトール・日レスHD、サンマルクHDをカフェ・外食テーマで比較する。
+companies:
+  - "3543"
+  - "3087"
+  - "3395"
+industry_mode: business_theme
+default_app_mode: general
+comparison_theme: カフェ・外食
+expected_warnings:
+  - 課題モードではJPX業種不一致警告
+notes:
+  - JPX業種は卸売業と小売業が混在するため、大学課題モードでは警告を確認する。

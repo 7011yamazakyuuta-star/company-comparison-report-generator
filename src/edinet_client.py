@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
@@ -8,7 +7,7 @@ from urllib.parse import urlencode
 
 import requests
 
-from .env_loader import load_env_file
+from .env_loader import get_runtime_secret
 
 
 EDINET_DOCUMENTS_ENDPOINT = "https://api.edinet-fsa.go.jp/api/v2/documents.json"
@@ -34,9 +33,8 @@ class EdinetClient:
     session: Any = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
-        load_env_file()
         if self.api_key is None:
-            self.api_key = os.environ.get("EDINET_API_KEY")
+            self.api_key = get_runtime_secret("EDINET_API_KEY")
         if self.session is None:
             self.session = requests.Session()
 

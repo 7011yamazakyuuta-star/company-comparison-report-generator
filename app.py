@@ -1,17 +1,30 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from html import escape
 
 import pandas as pd
 import streamlit as st
 
+from src.advanced_diagnostics import build_advanced_diagnostics
+from src.analysis_engine import (
+    build_dupont_driver_table,
+    build_management_issue_table,
+    build_profit_bridge_table,
+    build_sensitivity_risk_table,
+)
 from src.assignment_filters import check_assignment_conditions
 from src.company_master import select_companies
 from src.config_loader import load_industry_policy, load_presets, load_rubric
+from src.course_framework import build_plus_alpha_analysis_table, build_required_plus_alpha_table
 from src.data_loader import DEFAULT_DB_PATH, load_dataset
 from src.edinet_client import EdinetApiError, EdinetClient, extract_document_rows
 from src.edinet_files import save_raw_document
+from src.edinet_lookup import fetch_document_rows_for_tickers, sec_code_candidates
 from src.edinet_repository import filter_filings, load_filings, save_filings
+from src.llm_prompt import build_llm_report_prompt
+from src.metrics.financial import compute_financial_metrics
+from src.metrics.scoring import SCORE_LABELS, build_company_scores
 from src.report_writer import build_report_package
 
 
@@ -26,6 +39,47 @@ WORKFLOW_MODE_LABELS = {
 }
 
 WIZARD_STEP_LABELS = ["目的", "テーマ", "業種", "作成"]
+
+DETAIL_SECTION_LABELS = [
+    ("compare", "比較"),
+    ("checks", "条件チェック"),
+    ("report", "レポート"),
+    ("edinet", "EDINET取得"),
+]
+
+AUTO_THEME_CHOICES = [
+    ("friend_cafe_theme", "カフェをテーマで比較", "コメダHDとドトール・日レスHD。事業テーマ比較なので課題では警告も確認できます。"),
+    ("strict_cafe_retail", "課題向けカフェ小売", "ドトール・日レスHDとサンマルクHD。JPX業種一致を重視します。"),
+    ("cafe_three_theme", "カフェ3社を広く比較", "コメダHD、ドトール・日レスHD、サンマルクHD。業態の違いを見ます。"),
+    ("komeda_franchise_wholesale", "FC・卸売モデル比較", "コメダHDと神戸物産。FC展開と供給モデルを比べます。"),
+    ("food_retail_general", "食関連4社を俯瞰", "カフェ、外食、食品小売・卸売を広めに並べ、事業モデルの差を見ます。"),
+    ("airline_assignment", "航空会社を課題向けに比較", "日本航空、スターフライヤー、スカイマーク。再上場注記も扱います。"),
+    ("airline_relisting_focus", "航空の再上場後を比較", "JAL、スカイマーク、スターフライヤーを回復局面の視点で見ます。"),
+    ("airline_general", "航空会社を広く比較", "ANA HDも含めた汎用比較。課題条件より業界理解を優先します。"),
+    ("airline_full_general", "航空4社フル比較", "JAL、ANA HD、スターフライヤー、スカイマークを汎用モードで並べます。"),
+    ("custom_selection", "自由に企業を選ぶ", "証券コード、企業名、JPX業種、事業テーマから検索して2社以上を選びます。"),
+]
+
+AUTO_THEME_LABELS = {choice_id: title for choice_id, title, _body in AUTO_THEME_CHOICES}
+AUTO_THEME_DESCRIPTIONS = {choice_id: body for choice_id, _title, body in AUTO_THEME_CHOICES}
+PRESET_BUTTON_LABELS = {
+    "friend_cafe_theme": "友人カフェ",
+    "strict_cafe_retail": "カフェ小売",
+    "cafe_three_theme": "カフェ3社",
+    "komeda_franchise_wholesale": "FC・卸売",
+    "food_retail_general": "食関連4社",
+    "airline_assignment": "航空課題",
+    "airline_relisting_focus": "航空再上場",
+    "airline_general": "航空汎用",
+    "airline_full_general": "航空4社",
+}
+
+EDINET_LOOKBACK_PRESETS = [
+    ("quick", 30, "軽め", "最近提出された書類を素早く確認します。"),
+    ("standard", 45, "標準", "API回数と見つけやすさのバランスを取ります。"),
+    ("wide", 90, "広め", "提出日が少しずれた企業も拾いやすくします。"),
+    ("max", 120, "最大", "見つからない時の最終確認向けです。"),
+]
 
 
 def _apply_style() -> None:
@@ -44,10 +98,20 @@ def _apply_style() -> None:
             --app-blue-hover: #0077ed;
             --app-green: #248a3d;
             --app-red: #d70015;
+            --liquid-shadow: 0 22px 60px rgba(28, 44, 74, 0.12);
+            --liquid-inner: inset 0 1px 0 rgba(255, 255, 255, 0.96);
+            --liquid-blue: rgba(0, 113, 227, 0.88);
+            --liquid-blue-soft: rgba(110, 184, 255, 0.62);
         }
         html, body, [class*="css"] {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
                 "Yu Gothic UI", "Meiryo", sans-serif;
+        }
+        html,
+        body,
+        [data-testid="stRoot"] {
+            background: var(--app-bg) !important;
+            color: var(--app-text) !important;
         }
         .stApp {
             background: var(--app-bg);
@@ -70,7 +134,15 @@ def _apply_style() -> None:
         .block-container {
             padding-top: 1.35rem;
             padding-bottom: 3rem;
-            max-width: 1220px;
+            max-width: 1380px;
+            color: var(--app-text);
+        }
+        [data-testid="stAppViewContainer"],
+        [data-testid="stMain"],
+        section[data-testid="stSidebar"],
+        section.main {
+            background: var(--app-bg) !important;
+            color: var(--app-text) !important;
         }
         h1, h2, h3 {
             letter-spacing: 0;
@@ -87,6 +159,37 @@ def _apply_style() -> None:
         }
         p, label, span {
             letter-spacing: 0;
+        }
+        div[data-testid="stWidgetLabel"] p,
+        label p,
+        label span {
+            color: #424245 !important;
+            opacity: 1 !important;
+            font-weight: 620;
+            text-shadow: none !important;
+        }
+        body:has(.workflow-mode-auto) [data-testid="stSidebar"],
+        body:has(.workflow-mode-auto) [data-testid="stSidebarContent"],
+        body:has(.workflow-mode-auto) [data-testid="stSidebarUserContent"] {
+            display: none !important;
+            visibility: hidden !important;
+            width: 0 !important;
+            min-width: 0 !important;
+            max-width: 0 !important;
+            overflow: hidden !important;
+            border: 0 !important;
+            box-shadow: none !important;
+        }
+        body:has(.workflow-mode-auto) [data-testid="stSidebarCollapsedControl"],
+        body:has(.workflow-mode-auto) [data-testid="stSidebarCollapseButton"],
+        body:has(.workflow-mode-auto) [data-testid*="SidebarCollapsed"],
+        body:has(.workflow-mode-auto) [data-testid*="SidebarCollapse"] {
+            display: none !important;
+            visibility: hidden !important;
+        }
+        body:has(.workflow-mode-auto) [data-testid="stMain"],
+        body:has(.workflow-mode-auto) section.main {
+            margin-left: 0 !important;
         }
         div[data-testid="stSidebar"] {
             background: var(--app-surface-soft);
@@ -107,6 +210,40 @@ def _apply_style() -> None:
         div[data-testid="stSidebar"] h3 {
             font-size: 1rem;
         }
+        div[data-testid="stSidebar"] div[data-testid="stWidgetLabel"] p,
+        div[data-testid="stSidebar"] label p,
+        div[data-testid="stSidebar"] label span,
+        div[data-testid="stSidebar"] .stMarkdown p {
+            color: #424245 !important;
+            opacity: 1 !important;
+            font-weight: 620;
+        }
+        div[data-testid="stSidebar"] .stCaptionContainer p,
+        div[data-testid="stSidebar"] .quiet-caption,
+        div[data-testid="stSidebar"] .small-note {
+            color: var(--app-muted) !important;
+            font-weight: 500;
+        }
+        div[data-testid="stSidebar"] h1,
+        div[data-testid="stSidebar"] h2,
+        div[data-testid="stSidebar"] h3,
+        div[data-testid="stSidebar"] strong {
+            color: var(--app-text) !important;
+        }
+        section[data-testid="stSidebar"] div[data-testid="stWidgetLabel"] p,
+        section[data-testid="stSidebar"] label p,
+        section[data-testid="stSidebar"] label span {
+            color: #424245 !important;
+            opacity: 1 !important;
+            font-weight: 620;
+            text-shadow: none !important;
+        }
+        section[data-testid="stSidebar"] .stCaptionContainer p,
+        section[data-testid="stSidebar"] .stMarkdown p {
+            color: var(--app-muted) !important;
+            opacity: 1 !important;
+            text-shadow: none !important;
+        }
         .app-header {
             padding: 1rem 0 1.7rem;
             border-bottom: 0;
@@ -124,6 +261,34 @@ def _apply_style() -> None:
             line-height: 1.1;
             font-weight: 720;
             margin: 0;
+            text-decoration: none !important;
+            display: inline-flex;
+            align-items: center;
+            border-radius: 18px;
+            padding: 0.08rem 0.12rem;
+            transition:
+                color 160ms ease,
+                background 160ms ease,
+                transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+        }
+        .app-title,
+        .app-title:visited,
+        .app-title:focus,
+        .app-title:focus-visible,
+        .app-title:active {
+            color: var(--app-text) !important;
+            text-decoration: none !important;
+            border-bottom: 0 !important;
+            box-shadow: none !important;
+        }
+        .app-title:hover {
+            color: #0066cc !important;
+            background: rgba(255, 255, 255, 0.42);
+            text-decoration: none !important;
+            transform: translateY(-1px);
+        }
+        .app-title:active {
+            transform: scale(0.99);
         }
         .app-lede {
             color: var(--app-muted);
@@ -155,15 +320,17 @@ def _apply_style() -> None:
         .auto-shell {
             margin-top: 1.1rem;
             padding: 1.35rem;
-            border: 1px solid rgba(255, 255, 255, 0.86);
-            border-radius: 22px;
+            border: 1px solid rgba(255, 255, 255, 0.9);
+            border-radius: 26px;
             background:
-                linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.62)),
-                radial-gradient(circle at 85% 0%, rgba(255, 255, 255, 0.94), transparent 34%);
+                linear-gradient(145deg, rgba(255, 255, 255, 0.78), rgba(255, 255, 255, 0.44)),
+                radial-gradient(circle at 16% 8%, rgba(255, 255, 255, 0.96), transparent 30%),
+                radial-gradient(circle at 88% 12%, rgba(190, 216, 255, 0.30), transparent 36%);
             box-shadow:
-                inset 0 1px 0 rgba(255, 255, 255, 0.95),
-                0 18px 52px rgba(0, 0, 0, 0.08);
-            backdrop-filter: blur(24px) saturate(1.5);
+                var(--liquid-inner),
+                inset 0 -1px 0 rgba(255, 255, 255, 0.44),
+                var(--liquid-shadow);
+            backdrop-filter: blur(30px) saturate(1.65);
         }
         .auto-kicker {
             color: var(--app-muted);
@@ -186,35 +353,125 @@ def _apply_style() -> None:
             max-width: 720px;
         }
         .wizard-progress {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 0.45rem;
             margin: 1.15rem 0 1.2rem;
         }
-        .wizard-dot {
-            height: 0.42rem;
-            border-radius: 999px;
-            background: rgba(210, 210, 215, 0.72);
-            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+        .wizard-progress-track {
+            position: relative;
+            height: 0.62rem;
             overflow: hidden;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.74);
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(245, 245, 247, 0.46));
+            box-shadow:
+                var(--liquid-inner),
+                inset 0 -1px 0 rgba(40, 63, 96, 0.05),
+                0 10px 30px rgba(30, 38, 55, 0.08);
+            backdrop-filter: blur(20px) saturate(1.5);
         }
-        .wizard-dot.is-active,
-        .wizard-dot.is-done {
-            background: linear-gradient(90deg, rgba(29, 29, 31, 0.82), rgba(110, 110, 115, 0.62));
+        .wizard-progress-fill {
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: var(--progress);
+            border-radius: inherit;
+            background:
+                linear-gradient(90deg, rgba(119, 200, 255, 0.78), rgba(0, 113, 227, 0.90), rgba(71, 146, 255, 0.78)),
+                radial-gradient(circle at calc(var(--progress) - 8%) 35%, rgba(255, 255, 255, 0.72), transparent 26%);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.62),
+                0 8px 22px rgba(0, 113, 227, 0.18);
+            transition: width 420ms cubic-bezier(0.2, 0.85, 0.2, 1);
         }
-        .wizard-dot.is-active {
-            animation: liquid-slide-in 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+        .wizard-progress-fill::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.42), transparent);
+            transform: translateX(-68%);
+            animation: liquid-sheen 2.8s ease-in-out infinite;
+        }
+        .wizard-progress-labels {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            margin-top: 0.45rem;
+            color: rgba(110, 110, 115, 0.72);
+            font-size: 0.78rem;
+            font-weight: 650;
+        }
+        .wizard-progress-labels span.is-active {
+            color: #0066cc;
         }
         .choice-copy {
+            position: relative;
+            display: block;
             min-height: 6.35rem;
             padding: 1rem 1rem 0.75rem;
-            border: 1px solid rgba(255, 255, 255, 0.82);
-            border-radius: 18px;
-            background: rgba(255, 255, 255, 0.52);
+            border: 1px solid rgba(255, 255, 255, 0.9);
+            border-radius: 20px;
+            background:
+                linear-gradient(145deg, rgba(255, 255, 255, 0.68), rgba(255, 255, 255, 0.34)),
+                radial-gradient(circle at 12% 0%, rgba(255, 255, 255, 0.94), transparent 30%);
             box-shadow:
-                inset 0 1px 0 rgba(255, 255, 255, 0.88),
-                0 10px 28px rgba(0, 0, 0, 0.06);
-            backdrop-filter: blur(18px) saturate(1.45);
+                var(--liquid-inner),
+                0 12px 34px rgba(30, 38, 55, 0.08);
+            backdrop-filter: blur(24px) saturate(1.55);
+            transition:
+                transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+                box-shadow 180ms ease,
+                background 180ms ease,
+                border-color 180ms ease;
+        }
+        .choice-copy,
+        .choice-copy:visited,
+        .choice-copy:hover,
+        .choice-copy:active,
+        .choice-copy:focus {
+            color: inherit !important;
+            text-decoration: none !important;
+        }
+        .choice-copy.choice-link {
+            cursor: pointer;
+        }
+        .choice-copy.choice-link:hover {
+            border-color: rgba(111, 168, 255, 0.58);
+            background:
+                linear-gradient(145deg, rgba(255, 255, 255, 0.80), rgba(243, 249, 255, 0.48)),
+                radial-gradient(circle at 12% 0%, rgba(255, 255, 255, 0.96), transparent 32%);
+            box-shadow:
+                var(--liquid-inner),
+                0 0 0 3px rgba(0, 113, 227, 0.06),
+                0 16px 42px rgba(30, 38, 55, 0.10);
+            transform: translateY(-1px);
+        }
+        .choice-copy.choice-link:active {
+            transform: translateY(0) scale(0.992);
+        }
+        .choice-copy.is-selected {
+            background:
+                linear-gradient(145deg, rgba(255, 255, 255, 0.82), rgba(236, 246, 255, 0.52)),
+                radial-gradient(circle at 12% 0%, rgba(255, 255, 255, 0.98), transparent 34%);
+            border-color: rgba(111, 168, 255, 0.62);
+            box-shadow:
+                var(--liquid-inner),
+                0 0 0 3px rgba(0, 113, 227, 0.08),
+                0 16px 42px rgba(0, 113, 227, 0.16);
+            transform: translateY(-1px);
+        }
+        .choice-copy.is-selected::after {
+            content: "選択中";
+            position: absolute;
+            top: 0.72rem;
+            right: 0.78rem;
+            padding: 0.18rem 0.52rem;
+            border-radius: 999px;
+            color: #0066cc;
+            background: rgba(230, 242, 255, 0.88);
+            border: 1px solid rgba(111, 168, 255, 0.35);
+            font-size: 0.72rem;
+            font-weight: 720;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.86);
         }
         .choice-title {
             color: var(--app-text);
@@ -226,6 +483,444 @@ def _apply_style() -> None:
             color: var(--app-muted);
             font-size: 0.88rem;
             line-height: 1.55;
+        }
+        .choice-button-wrap + div[data-testid="stButton"] button {
+            position: relative;
+            justify-content: flex-start;
+            align-items: flex-start;
+            text-align: left;
+            min-height: 6.35rem;
+            width: 100%;
+            padding: 1rem 1rem 0.75rem;
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.9);
+            background:
+                linear-gradient(145deg, rgba(255, 255, 255, 0.68), rgba(255, 255, 255, 0.34)),
+                radial-gradient(circle at 12% 0%, rgba(255, 255, 255, 0.94), transparent 30%);
+            box-shadow:
+                var(--liquid-inner),
+                0 12px 34px rgba(30, 38, 55, 0.08);
+            backdrop-filter: blur(24px) saturate(1.55);
+        }
+        .choice-button-wrap + div[data-testid="stButton"] button p {
+            color: var(--app-text) !important;
+            font-size: 1rem;
+            font-weight: 700;
+            line-height: 1.55;
+            text-align: left;
+        }
+        .choice-button-wrap + div[data-testid="stButton"] button:hover {
+            border-color: rgba(111, 168, 255, 0.58);
+            background:
+                linear-gradient(145deg, rgba(255, 255, 255, 0.80), rgba(243, 249, 255, 0.48)),
+                radial-gradient(circle at 12% 0%, rgba(255, 255, 255, 0.96), transparent 32%);
+            box-shadow:
+                var(--liquid-inner),
+                0 0 0 3px rgba(0, 113, 227, 0.06),
+                0 16px 42px rgba(30, 38, 55, 0.10);
+        }
+        .choice-button-wrap.is-selected + div[data-testid="stButton"] button {
+            border-color: rgba(111, 168, 255, 0.62);
+            background:
+                linear-gradient(145deg, rgba(255, 255, 255, 0.82), rgba(236, 246, 255, 0.52)),
+                radial-gradient(circle at 12% 0%, rgba(255, 255, 255, 0.98), transparent 34%);
+            box-shadow:
+                var(--liquid-inner),
+                0 0 0 3px rgba(0, 113, 227, 0.08),
+                0 16px 42px rgba(0, 113, 227, 0.16);
+        }
+        .choice-button-wrap.is-selected + div[data-testid="stButton"] button::after {
+            content: "選択中";
+            position: absolute;
+            top: 0.72rem;
+            right: 0.78rem;
+            padding: 0.18rem 0.52rem;
+            border-radius: 999px;
+            color: #0066cc;
+            background: rgba(230, 242, 255, 0.88);
+            border: 1px solid rgba(111, 168, 255, 0.35);
+            font-size: 0.72rem;
+            font-weight: 720;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.86);
+        }
+        .wizard-action-spacer {
+            height: 1.05rem;
+        }
+        .detail-section-nav {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 0.55rem;
+            width: 100%;
+            max-width: 980px;
+            margin: 1rem 0 1.25rem;
+            padding: 0.38rem;
+            border-radius: 24px;
+            border: 1px solid rgba(255, 255, 255, 0.92);
+            background:
+                linear-gradient(145deg, rgba(255, 255, 255, 0.80), rgba(255, 255, 255, 0.52)),
+                radial-gradient(circle at 8% 0%, rgba(255, 255, 255, 0.96), transparent 36%);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.94),
+                0 14px 36px rgba(30, 38, 55, 0.10);
+            backdrop-filter: blur(24px) saturate(1.58);
+        }
+        .detail-section-nav a {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 3.35rem;
+            border-radius: 18px;
+            color: var(--app-text) !important;
+            background:
+                linear-gradient(145deg, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.62));
+            border: 1px solid rgba(255, 255, 255, 0.92);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.94),
+                0 8px 22px rgba(30, 38, 55, 0.06);
+            font-size: 1rem;
+            font-weight: 760;
+            text-decoration: none !important;
+            transition:
+                transform 170ms cubic-bezier(0.2, 0.8, 0.2, 1),
+                background 190ms ease,
+                box-shadow 190ms ease;
+        }
+        .detail-section-nav a:hover {
+            transform: translateY(-1px);
+            background: rgba(255, 255, 255, 0.94);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.96),
+                0 12px 28px rgba(30, 38, 55, 0.10);
+        }
+        .detail-section-nav a.is-active {
+            color: #ffffff !important;
+            background:
+                linear-gradient(180deg, rgba(0, 126, 245, 0.96), rgba(0, 102, 214, 0.96));
+            border-color: rgba(255, 255, 255, 0.58);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.44),
+                0 14px 34px rgba(0, 113, 227, 0.30);
+        }
+        @media (max-width: 720px) {
+            .detail-section-nav {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                border-radius: 20px;
+            }
+            .detail-section-nav a {
+                min-height: 3rem;
+                font-size: 0.92rem;
+            }
+        }
+        div:has(> .detail-section-segmented-marker) + div[data-testid="stSegmentedControl"] {
+            max-width: 980px;
+            margin: 1rem 0 1.25rem;
+        }
+        div:has(> .detail-section-segmented-marker) + div[data-testid="stSegmentedControl"] div[role="group"] {
+            width: 100%;
+            gap: 0.55rem;
+            padding: 0.38rem;
+            border-radius: 24px;
+            border: 1px solid rgba(255, 255, 255, 0.92);
+            background:
+                linear-gradient(145deg, rgba(255, 255, 255, 0.80), rgba(255, 255, 255, 0.52)),
+                radial-gradient(circle at 8% 0%, rgba(255, 255, 255, 0.96), transparent 36%);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.94),
+                0 14px 36px rgba(30, 38, 55, 0.10);
+            backdrop-filter: blur(24px) saturate(1.58);
+        }
+        div:has(> .detail-section-segmented-marker) + div[data-testid="stSegmentedControl"] button {
+            min-height: 3.35rem;
+            border-radius: 18px !important;
+            font-size: 1rem;
+            font-weight: 760;
+            background:
+                linear-gradient(145deg, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.62));
+            border: 1px solid rgba(255, 255, 255, 0.92) !important;
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.94),
+                0 8px 22px rgba(30, 38, 55, 0.06);
+        }
+        div:has(> .detail-section-segmented-marker) + div[data-testid="stSegmentedControl"] button[kind="primary"],
+        div:has(> .detail-section-segmented-marker) + div[data-testid="stSegmentedControl"] button[aria-pressed="true"],
+        div:has(> .detail-section-segmented-marker) + div[data-testid="stSegmentedControl"] button[aria-selected="true"] {
+            color: #ffffff !important;
+            background:
+                linear-gradient(180deg, rgba(0, 126, 245, 0.96), rgba(0, 102, 214, 0.96)) !important;
+            border-color: rgba(255, 255, 255, 0.58) !important;
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.44),
+                0 14px 34px rgba(0, 113, 227, 0.30) !important;
+        }
+        div:has(> .detail-section-segmented-marker) + div[data-testid="stSegmentedControl"] button[kind="primary"] p,
+        div:has(> .detail-section-segmented-marker) + div[data-testid="stSegmentedControl"] button[aria-pressed="true"] p,
+        div:has(> .detail-section-segmented-marker) + div[data-testid="stSegmentedControl"] button[aria-selected="true"] p {
+            color: #ffffff !important;
+            -webkit-text-fill-color: #ffffff !important;
+        }
+        @media (max-width: 720px) {
+            div:has(> .detail-section-segmented-marker) + div[data-testid="stSegmentedControl"] div[role="group"] {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                border-radius: 20px;
+            }
+            div:has(> .detail-section-segmented-marker) + div[data-testid="stSegmentedControl"] button {
+                min-height: 3rem;
+                font-size: 0.92rem;
+            }
+        }
+        .main-section-nav-marker + div[data-testid="stButton"] button {
+            min-height: 3.35rem;
+            border-radius: 18px;
+            font-size: 1rem;
+            font-weight: 760;
+            letter-spacing: 0;
+            background:
+                linear-gradient(145deg, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.62));
+            border: 1px solid rgba(255, 255, 255, 0.92);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.94),
+                0 12px 30px rgba(30, 38, 55, 0.09);
+            backdrop-filter: blur(22px) saturate(1.5);
+        }
+        .main-section-nav-marker + div[data-testid="stButton"] button p {
+            font-size: 1rem;
+            font-weight: 760;
+        }
+        .main-section-nav-marker.is-active + div[data-testid="stButton"] button {
+            color: #ffffff !important;
+            background:
+                linear-gradient(180deg, rgba(0, 126, 245, 0.96), rgba(0, 102, 214, 0.96)) !important;
+            border-color: rgba(255, 255, 255, 0.58) !important;
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.44),
+                0 14px 34px rgba(0, 113, 227, 0.30) !important;
+        }
+        .main-section-nav-marker.is-active + div[data-testid="stButton"] button p {
+            color: #ffffff !important;
+            -webkit-text-fill-color: #ffffff !important;
+        }
+        .main-section-nav-marker + div[data-testid="stButton"] {
+            margin-bottom: 1rem;
+        }
+        .template-summary,
+        .search-panel,
+        .edinet-focus-panel {
+            margin: 0.75rem 0 1rem;
+            padding: 1rem;
+            border: 1px solid rgba(255, 255, 255, 0.9);
+            border-radius: 18px;
+            background:
+                linear-gradient(145deg, rgba(255, 255, 255, 0.78), rgba(255, 255, 255, 0.48)),
+                radial-gradient(circle at 8% 0%, rgba(255, 255, 255, 0.92), transparent 34%);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.9),
+                0 12px 34px rgba(30, 38, 55, 0.08);
+            backdrop-filter: blur(22px) saturate(1.5);
+        }
+        .edinet-filter-title {
+            color: var(--app-text);
+            font-size: 0.96rem;
+            font-weight: 760;
+            margin: 0.15rem 0 0.22rem;
+        }
+        .edinet-filter-body {
+            color: var(--app-muted);
+            font-size: 0.78rem;
+            line-height: 1.45;
+            min-height: 2.25rem;
+            margin-bottom: 0.45rem;
+        }
+        .edinet-filter-help {
+            margin: 0.45rem 0 0.75rem;
+            padding: 0.68rem 0.82rem;
+            border-radius: 14px;
+            border: 1px solid rgba(0, 113, 227, 0.16);
+            background:
+                linear-gradient(145deg, rgba(236, 246, 255, 0.86), rgba(255, 255, 255, 0.64));
+            color: #3f4652;
+            font-size: 0.82rem;
+            line-height: 1.55;
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.92),
+                0 8px 24px rgba(30, 38, 55, 0.06);
+        }
+        .edinet-filter-help strong {
+            color: #1d1d1f;
+            font-weight: 760;
+        }
+        .edinet-period-help,
+        .edinet-period-summary {
+            margin: 0.45rem 0 0.75rem;
+            padding: 0.78rem 0.9rem;
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.88);
+            background:
+                linear-gradient(145deg, rgba(255, 255, 255, 0.82), rgba(245, 248, 253, 0.58)),
+                radial-gradient(circle at 8% 0%, rgba(255, 255, 255, 0.95), transparent 35%);
+            color: #424245;
+            font-size: 0.85rem;
+            line-height: 1.55;
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.92),
+                0 10px 28px rgba(30, 38, 55, 0.07);
+            backdrop-filter: blur(18px) saturate(1.45);
+        }
+        .edinet-period-title {
+            color: var(--app-text);
+            font-size: 1rem;
+            font-weight: 760;
+            margin-bottom: 0.2rem;
+        }
+        .edinet-period-summary {
+            display: flex;
+            justify-content: space-between;
+            gap: 0.85rem;
+            align-items: center;
+            border-color: rgba(0, 113, 227, 0.18);
+            background:
+                linear-gradient(145deg, rgba(235, 246, 255, 0.88), rgba(255, 255, 255, 0.64));
+        }
+        .edinet-period-summary strong {
+            color: #1d1d1f;
+            font-weight: 760;
+        }
+        .edinet-period-badge {
+            flex: 0 0 auto;
+            border-radius: 999px;
+            padding: 0.28rem 0.62rem;
+            color: #0b63ce;
+            background: rgba(0, 113, 227, 0.1);
+            font-size: 0.78rem;
+            font-weight: 720;
+        }
+        div:has(> .edinet-period-marker) + div[data-testid="stSegmentedControl"] div[role="group"] {
+            min-height: 3.25rem;
+            padding: 0.25rem;
+            border-radius: 18px;
+            border: 1px solid rgba(255, 255, 255, 0.92);
+            background: rgba(255, 255, 255, 0.72);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.94),
+                0 12px 32px rgba(30, 38, 55, 0.08);
+            backdrop-filter: blur(18px) saturate(1.45);
+        }
+        div:has(> .edinet-period-marker) + div[data-testid="stSegmentedControl"] button {
+            min-height: 2.65rem !important;
+            border-radius: 14px !important;
+            font-weight: 700 !important;
+        }
+        div:has(> .edinet-period-marker) + div[data-testid="stSegmentedControl"] button[kind="primary"],
+        div:has(> .edinet-period-marker) + div[data-testid="stSegmentedControl"] button[aria-pressed="true"],
+        div:has(> .edinet-period-marker) + div[data-testid="stSegmentedControl"] button[aria-selected="true"] {
+            background:
+                linear-gradient(135deg, rgba(0, 113, 227, 0.9), rgba(98, 163, 244, 0.9)) !important;
+            color: #ffffff !important;
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.45),
+                0 10px 22px rgba(0, 113, 227, 0.2) !important;
+        }
+        div:has(> .edinet-period-marker) + div[data-testid="stSegmentedControl"] button[kind="primary"] p,
+        div:has(> .edinet-period-marker) + div[data-testid="stSegmentedControl"] button[aria-pressed="true"] p,
+        div:has(> .edinet-period-marker) + div[data-testid="stSegmentedControl"] button[aria-selected="true"] p {
+            color: #ffffff !important;
+            -webkit-text-fill-color: #ffffff !important;
+        }
+        @media (max-width: 720px) {
+            .edinet-period-summary {
+                display: block;
+            }
+            .edinet-period-badge {
+                display: inline-flex;
+                margin-top: 0.55rem;
+            }
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.edinet-filter-title) {
+            border-radius: 16px !important;
+            border-color: rgba(255, 255, 255, 0.92) !important;
+            background:
+                linear-gradient(145deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.56)) !important;
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.94),
+                0 10px 26px rgba(30, 38, 55, 0.07) !important;
+            backdrop-filter: blur(18px) saturate(1.4);
+        }
+        .template-summary-title {
+            color: var(--app-text);
+            font-size: 1.05rem;
+            font-weight: 720;
+            margin-bottom: 0.28rem;
+        }
+        .template-summary-body {
+            color: var(--app-muted);
+            font-size: 0.9rem;
+            line-height: 1.55;
+            margin: 0;
+        }
+        .template-chip-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.45rem;
+            margin-top: 0.7rem;
+        }
+        .template-chip-row span {
+            display: inline-flex;
+            align-items: center;
+            min-height: 1.85rem;
+            border-radius: 999px;
+            padding: 0.22rem 0.64rem;
+            color: var(--app-muted);
+            background: rgba(255, 255, 255, 0.72);
+            border: 1px solid rgba(255, 255, 255, 0.88);
+            font-size: 0.8rem;
+            font-weight: 650;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+        }
+        .company-selection-list {
+            display: grid;
+            gap: 0.45rem;
+            margin: 0.65rem 0 0.35rem;
+        }
+        .company-selection-row {
+            display: grid;
+            grid-template-columns: 4.2rem 1fr;
+            gap: 0.55rem;
+            align-items: center;
+            padding: 0.55rem 0.65rem;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.86);
+            background: rgba(255, 255, 255, 0.68);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.9),
+                0 6px 18px rgba(30, 38, 55, 0.06);
+        }
+        .company-selection-code {
+            color: #0066cc;
+            font-size: 0.84rem;
+            font-weight: 720;
+        }
+        .company-selection-name {
+            color: var(--app-text);
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 0.88rem;
+            font-weight: 650;
+        }
+        .company-selection-meta {
+            grid-column: 1 / -1;
+            color: var(--app-muted);
+            font-size: 0.78rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .company-remove-caption {
+            color: var(--app-muted);
+            font-size: 0.78rem;
+            line-height: 1.45;
+            margin: 0.1rem 0 0.35rem;
         }
         .review-line {
             display: flex;
@@ -248,6 +943,45 @@ def _apply_style() -> None:
         .workflow-switch {
             margin: 0.4rem 0 0.85rem;
             max-width: 28rem;
+        }
+        .sidebar-mode-switch {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.25rem;
+            margin: 0.35rem 0 1.15rem;
+            padding: 0.25rem;
+            border: 1px solid rgba(255, 255, 255, 0.86);
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.56);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.92),
+                0 10px 30px rgba(30, 38, 55, 0.08);
+            backdrop-filter: blur(20px) saturate(1.55);
+        }
+        .sidebar-mode-switch a {
+            min-height: 2.35rem;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 999px;
+            color: var(--app-muted) !important;
+            text-decoration: none !important;
+            font-weight: 650;
+            transition:
+                color 180ms ease,
+                background 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+                transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+                box-shadow 220ms ease;
+        }
+        .sidebar-mode-switch a.is-active {
+            color: var(--app-text) !important;
+            background: rgba(255, 255, 255, 0.90);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.96),
+                0 8px 22px rgba(30, 38, 55, 0.10);
+        }
+        .sidebar-mode-switch a:active {
+            transform: scale(0.985);
         }
         .soft-divider {
             height: 1px;
@@ -278,7 +1012,14 @@ def _apply_style() -> None:
             backdrop-filter: blur(18px) saturate(1.45);
         }
         div[data-testid="stMetricLabel"] {
-            color: var(--app-muted);
+            color: #6e6e73 !important;
+            opacity: 1 !important;
+        }
+        div[data-testid="stMetricLabel"] *,
+        div[data-testid="stMetricLabel"] p {
+            color: #6e6e73 !important;
+            opacity: 1 !important;
+            text-shadow: none !important;
         }
         div[data-testid="stMetricValue"] {
             color: var(--app-text);
@@ -287,7 +1028,15 @@ def _apply_style() -> None:
         }
         div[data-testid="stAlert"] {
             border-radius: 8px;
-            border-color: var(--app-border-soft);
+            border-color: rgba(154, 103, 0, 0.24) !important;
+            background: rgba(255, 248, 224, 0.94) !important;
+            color: #2f2300 !important;
+        }
+        div[data-testid="stAlert"] *,
+        div[data-testid="stAlert"] p {
+            color: #2f2300 !important;
+            opacity: 1 !important;
+            text-shadow: none !important;
         }
         div[data-testid="stDataFrame"] {
             border-radius: 8px;
@@ -295,11 +1044,12 @@ def _apply_style() -> None:
         }
         .stButton > button,
         .stDownloadButton > button {
-            border-radius: 8px;
+            border-radius: 16px;
             min-height: 2.45rem;
             font-weight: 650;
             border: 1px solid rgba(255, 255, 255, 0.82);
-            background: rgba(255, 255, 255, 0.64);
+            background:
+                linear-gradient(145deg, rgba(255, 255, 255, 0.74), rgba(255, 255, 255, 0.48));
             color: var(--app-text);
             box-shadow:
                 inset 0 1px 0 rgba(255, 255, 255, 0.9),
@@ -310,6 +1060,11 @@ def _apply_style() -> None:
                 box-shadow 160ms ease,
                 background 160ms ease,
                 border-color 160ms ease;
+        }
+        .stButton > button p,
+        .stDownloadButton > button p {
+            white-space: normal;
+            line-height: 1.35;
         }
         button:focus,
         button:focus-visible,
@@ -355,12 +1110,18 @@ def _apply_style() -> None:
         }
         .stButton > button[kind="primary"],
         .stDownloadButton > button[kind="primary"] {
-            background: linear-gradient(180deg, rgba(0, 119, 237, 0.92), rgba(0, 94, 196, 0.92));
+            background:
+                linear-gradient(180deg, rgba(64, 154, 255, 0.94), rgba(0, 113, 227, 0.94)),
+                radial-gradient(circle at 28% 0%, rgba(255, 255, 255, 0.45), transparent 38%);
             border-color: rgba(255, 255, 255, 0.42);
             color: #ffffff;
             box-shadow:
                 inset 0 1px 0 rgba(255, 255, 255, 0.38),
                 0 10px 28px rgba(0, 113, 227, 0.28);
+        }
+        .stButton > button[kind="primary"] p,
+        .stDownloadButton > button[kind="primary"] p {
+            color: #ffffff !important;
         }
         .stButton > button[kind="primary"]:hover,
         .stDownloadButton > button[kind="primary"]:hover {
@@ -371,41 +1132,202 @@ def _apply_style() -> None:
                 inset 0 1px 0 rgba(255, 255, 255, 0.46),
                 0 12px 32px rgba(0, 113, 227, 0.34);
         }
-        div[data-baseweb="tab-list"] {
-            gap: 0.35rem;
-            width: fit-content;
-            max-width: 100%;
-            border: 1px solid rgba(255, 255, 255, 0.82);
-            border-radius: 999px;
-            padding: 0.25rem;
-            background: rgba(255, 255, 255, 0.56);
+        .stButton > button:disabled,
+        .stDownloadButton > button:disabled {
+            color: #6e6e73 !important;
+            background:
+                linear-gradient(145deg, rgba(245, 245, 247, 0.92), rgba(232, 232, 237, 0.82)) !important;
             box-shadow:
-                inset 0 1px 0 rgba(255, 255, 255, 0.88),
-                0 10px 30px rgba(0, 0, 0, 0.08);
-            backdrop-filter: blur(20px) saturate(1.55);
-            margin-top: 0.7rem;
+                inset 0 1px 0 rgba(255, 255, 255, 0.82),
+                0 6px 18px rgba(0, 0, 0, 0.05) !important;
+            border-color: rgba(210, 210, 215, 0.76) !important;
+            transform: none;
+            opacity: 1 !important;
+        }
+        .stButton > button:disabled p,
+        .stDownloadButton > button:disabled p {
+            color: #6e6e73 !important;
+            opacity: 1 !important;
+            -webkit-text-fill-color: #6e6e73 !important;
+        }
+        div:has(> div[data-baseweb="tab-list"]),
+        div:has(> div > div[data-baseweb="tab-list"]) {
+            width: 100% !important;
+            max-width: 980px !important;
+        }
+        div[data-baseweb="tab-list"] {
+            display: flex !important;
+            gap: 0.48rem;
+            width: 100% !important;
+            max-width: 980px !important;
+            border: 1px solid rgba(255, 255, 255, 0.9);
+            border-radius: 22px;
+            padding: 0.36rem;
+            background:
+                linear-gradient(145deg, rgba(255, 255, 255, 0.78), rgba(255, 255, 255, 0.50)),
+                radial-gradient(circle at 8% 0%, rgba(255, 255, 255, 0.94), transparent 36%);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.94),
+                0 14px 36px rgba(30, 38, 55, 0.10);
+            backdrop-filter: blur(24px) saturate(1.58);
+            margin: 1rem 0 1.25rem;
+            overflow-x: auto;
+            scrollbar-width: none;
+        }
+        div[data-baseweb="tab-list"]::-webkit-scrollbar {
+            display: none;
+        }
+        div[data-baseweb="tab-highlight"],
+        div[data-baseweb="tab-border"] {
+            display: none !important;
+            visibility: hidden !important;
+            height: 0 !important;
+            background: transparent !important;
+            border: 0 !important;
+            box-shadow: none !important;
         }
         button[data-baseweb="tab"] {
             background: transparent;
-            border-radius: 999px;
+            border-radius: 16px;
             color: var(--app-muted);
-            font-weight: 650;
-            padding: 0.55rem 1rem;
-            min-height: 2.2rem;
+            flex: 1 1 0;
+            min-width: 12.2rem;
+            font-weight: 720;
+            font-size: 0.96rem;
+            letter-spacing: 0;
+            padding: 0.78rem 1.1rem;
+            min-height: 3.15rem;
+            border-bottom: 0 !important;
             transition:
                 color 180ms ease,
                 background 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
                 box-shadow 220ms ease,
                 transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
         }
+        button[data-baseweb="tab"]::after,
+        button[data-baseweb="tab"]::before {
+            display: none !important;
+            content: none !important;
+        }
         button[data-baseweb="tab"][aria-selected="true"] {
-            color: var(--app-text);
-            background: rgba(255, 255, 255, 0.86);
+            color: #ffffff;
+            background:
+                linear-gradient(180deg, rgba(0, 126, 245, 0.96), rgba(0, 102, 214, 0.96));
             border-bottom: 0;
             box-shadow:
-                inset 0 1px 0 rgba(255, 255, 255, 0.92),
-                0 4px 14px rgba(0, 0, 0, 0.08);
+                inset 0 1px 0 rgba(255, 255, 255, 0.44),
+                0 10px 26px rgba(0, 113, 227, 0.28);
             animation: liquid-slide-in 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+        }
+        button[data-baseweb="tab"][aria-selected="true"] p,
+        button[data-baseweb="tab"][aria-selected="true"] span {
+            color: #ffffff !important;
+            -webkit-text-fill-color: #ffffff !important;
+        }
+        button[data-baseweb="tab"]:hover:not([aria-selected="true"]) {
+            color: var(--app-text);
+            background: rgba(255, 255, 255, 0.72);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.92),
+                0 6px 18px rgba(30, 38, 55, 0.07);
+        }
+        button[data-baseweb="tab"]:focus,
+        button[data-baseweb="tab"]:focus-visible {
+            outline: none !important;
+            box-shadow:
+                0 0 0 3px rgba(0, 113, 227, 0.14),
+                inset 0 1px 0 rgba(255, 255, 255, 0.9) !important;
+        }
+        @media (max-width: 720px) {
+            div[data-baseweb="tab-list"] {
+                width: 100%;
+                border-radius: 18px;
+                gap: 0.35rem;
+            }
+            button[data-baseweb="tab"] {
+                flex: 0 0 auto;
+                min-width: 8.4rem;
+                min-height: 2.85rem;
+                padding: 0.68rem 0.85rem;
+                font-size: 0.9rem;
+            }
+        }
+        div[data-baseweb="tab-list"]:has(button:nth-of-type(5)) {
+            gap: 0.32rem;
+            width: fit-content;
+            max-width: 100%;
+            border-radius: 999px;
+            padding: 0.24rem;
+            margin: 0.7rem 0 0.9rem;
+            background: rgba(255, 255, 255, 0.58);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.88),
+                0 8px 24px rgba(30, 38, 55, 0.07);
+        }
+        div[data-baseweb="tab-list"]:has(button:nth-of-type(5)) button[data-baseweb="tab"] {
+            flex: 0 0 auto;
+            min-width: auto;
+            min-height: 2.25rem;
+            border-radius: 999px;
+            padding: 0.52rem 0.86rem;
+            font-size: 0.86rem;
+            font-weight: 650;
+        }
+        div[data-baseweb="tab-list"]:has(button:nth-of-type(5)) button[data-baseweb="tab"][aria-selected="true"] {
+            color: var(--app-text);
+            background: rgba(255, 255, 255, 0.88);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.92),
+                0 4px 14px rgba(30, 38, 55, 0.08);
+        }
+        div[data-baseweb="tab-list"]:has(button:nth-of-type(5)) button[data-baseweb="tab"][aria-selected="true"] p,
+        div[data-baseweb="tab-list"]:has(button:nth-of-type(5)) button[data-baseweb="tab"][aria-selected="true"] span {
+            color: var(--app-text) !important;
+            -webkit-text-fill-color: var(--app-text) !important;
+        }
+        div[data-testid="stExpander"] {
+            border: 1px solid rgba(210, 210, 215, 0.72) !important;
+            border-radius: 14px !important;
+            overflow: hidden;
+            background:
+                linear-gradient(145deg, rgba(255, 255, 255, 0.78), rgba(255, 255, 255, 0.54)) !important;
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.86),
+                0 10px 28px rgba(30, 38, 55, 0.06) !important;
+            backdrop-filter: blur(18px) saturate(1.4);
+        }
+        div[data-testid="stExpander"] details,
+        div[data-testid="stExpander"] details[open] {
+            background: transparent !important;
+            color: var(--app-text) !important;
+        }
+        div[data-testid="stExpander"] summary,
+        div[data-testid="stExpander"] summary:hover,
+        div[data-testid="stExpander"] summary:focus,
+        div[data-testid="stExpander"] summary:focus-visible,
+        div[data-testid="stExpander"] summary:active,
+        div[data-testid="stExpander"] details[open] summary {
+            background: rgba(255, 255, 255, 0.72) !important;
+            color: var(--app-text) !important;
+            border: 0 !important;
+            outline: 0 !important;
+            box-shadow: none !important;
+        }
+        div[data-testid="stExpander"] summary *,
+        div[data-testid="stExpander"] details[open] summary * {
+            color: var(--app-text) !important;
+            -webkit-text-fill-color: var(--app-text) !important;
+        }
+        div[data-testid="stExpanderDetails"] {
+            background: rgba(255, 255, 255, 0.66) !important;
+            color: var(--app-text) !important;
+            border-top: 1px solid rgba(210, 210, 215, 0.58) !important;
+        }
+        div[data-testid="stCodeBlock"] {
+            border-radius: 14px !important;
+            overflow: hidden;
+            border: 1px solid rgba(210, 210, 215, 0.72) !important;
+            box-shadow: 0 10px 28px rgba(30, 38, 55, 0.06) !important;
         }
         div[data-testid="stSegmentedControl"],
         div[data-testid="stButtonGroup"] {
@@ -459,13 +1381,141 @@ def _apply_style() -> None:
         }
         div[data-baseweb="input"] > div,
         div[data-baseweb="select"] > div,
-        textarea,
-        input {
+        div[data-baseweb="textarea"] > div,
+        textarea {
             border-radius: 8px !important;
-            background: rgba(255, 255, 255, 0.72) !important;
-            border-color: rgba(255, 255, 255, 0.85) !important;
-            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.86);
+            background: rgba(255, 255, 255, 0.94) !important;
+            border: 1px solid rgba(198, 198, 203, 0.92) !important;
+            border-color: rgba(198, 198, 203, 0.92) !important;
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.96),
+                0 1px 2px rgba(30, 38, 55, 0.04);
             backdrop-filter: blur(14px) saturate(1.35);
+            color: var(--app-text) !important;
+        }
+        div[data-baseweb="input"] > div:hover,
+        div[data-baseweb="textarea"] > div:hover,
+        textarea:hover {
+            background: rgba(255, 255, 255, 0.98) !important;
+            border-color: rgba(134, 134, 139, 0.64) !important;
+        }
+        div[data-baseweb="input"] > div:focus-within,
+        div[data-baseweb="textarea"] > div:focus-within,
+        textarea:focus {
+            background: #ffffff !important;
+            border-color: rgba(0, 113, 227, 0.72) !important;
+            box-shadow:
+                0 0 0 3px rgba(0, 113, 227, 0.12),
+                inset 0 1px 0 rgba(255, 255, 255, 0.98) !important;
+            outline: none !important;
+        }
+        div[data-baseweb="input"] input,
+        div[data-baseweb="textarea"] textarea,
+        textarea {
+            background: transparent !important;
+            border: 0 !important;
+            box-shadow: none !important;
+            color: var(--app-text) !important;
+            -webkit-text-fill-color: var(--app-text) !important;
+        }
+        div[data-baseweb="input"] input:disabled,
+        div[data-baseweb="textarea"] textarea:disabled,
+        div[data-baseweb="input"][aria-disabled="true"] > div,
+        div[data-baseweb="textarea"][aria-disabled="true"] > div {
+            background: rgba(245, 245, 247, 0.82) !important;
+            color: #86868b !important;
+            -webkit-text-fill-color: #86868b !important;
+            opacity: 1 !important;
+        }
+        div[data-baseweb="select"] input,
+        div[data-baseweb="select"] input:focus,
+        div[data-baseweb="select"] div[contenteditable="true"],
+        div[data-baseweb="select"] div[contenteditable="true"]:focus {
+            width: 1px !important;
+            min-width: 1px !important;
+            max-width: 1px !important;
+            height: 1.2em !important;
+            min-height: 0 !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            border: 0 !important;
+            border-radius: 0 !important;
+            background: transparent !important;
+            box-shadow: none !important;
+            outline: none !important;
+            color: transparent !important;
+            -webkit-text-fill-color: transparent !important;
+            caret-color: transparent !important;
+        }
+        div[data-baseweb="select"] svg,
+        div[data-baseweb="select"] [data-baseweb="icon"] {
+            color: #86868b !important;
+            opacity: 1 !important;
+            fill: #86868b !important;
+        }
+        div[data-baseweb="input"] input::placeholder,
+        div[data-baseweb="textarea"] textarea::placeholder,
+        textarea::placeholder {
+            color: #86868b !important;
+            opacity: 1 !important;
+            -webkit-text-fill-color: #86868b !important;
+        }
+        div[data-baseweb="popover"],
+        div[role="listbox"],
+        ul[role="listbox"] {
+            background: rgba(255, 255, 255, 0.96) !important;
+            color: var(--app-text) !important;
+            border: 1px solid rgba(210, 210, 215, 0.8) !important;
+            box-shadow: 0 18px 50px rgba(30, 38, 55, 0.16) !important;
+            backdrop-filter: blur(24px) saturate(1.45);
+        }
+        div[role="option"] {
+            color: var(--app-text) !important;
+            background: transparent !important;
+        }
+        div[role="option"]:hover,
+        div[role="option"][aria-selected="true"] {
+            background: rgba(0, 113, 227, 0.09) !important;
+        }
+        div[data-baseweb="select"] [data-baseweb="tag"] {
+            display: inline-flex !important;
+            align-items: center !important;
+            gap: 0.45rem !important;
+            min-height: 2.25rem !important;
+            height: auto !important;
+            max-width: 100% !important;
+            padding: 0.34rem 0.68rem !important;
+            border-radius: 18px !important;
+            background:
+                linear-gradient(145deg, rgba(0, 113, 227, 0.86), rgba(84, 174, 255, 0.72)) !important;
+            border: 1px solid rgba(255, 255, 255, 0.52) !important;
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.42),
+                0 8px 20px rgba(0, 113, 227, 0.18) !important;
+        }
+        div[data-baseweb="select"] [data-baseweb="tag"] > div:first-child {
+            min-width: 0 !important;
+            max-width: min(28rem, calc(100vw - 9rem)) !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+            white-space: nowrap !important;
+        }
+        div[data-baseweb="select"] [data-baseweb="tag"] span,
+        div[data-baseweb="select"] [data-baseweb="tag"] div {
+            line-height: 1.25 !important;
+            white-space: nowrap !important;
+        }
+        div[data-baseweb="select"] [data-baseweb="tag"] svg,
+        div[data-baseweb="select"] [data-baseweb="tag"] button {
+            flex: 0 0 auto !important;
+            margin: 0 !important;
+            position: static !important;
+        }
+        div[data-baseweb="select"] [data-baseweb="tag"] button {
+            width: 1.5rem !important;
+            height: 1.5rem !important;
+            border-radius: 999px !important;
+            background: rgba(255, 255, 255, 0.22) !important;
         }
         div[data-baseweb="slider"] [role="slider"] {
             border: 1px solid rgba(255, 255, 255, 0.9);
@@ -478,8 +1528,33 @@ def _apply_style() -> None:
                 box-shadow 120ms ease;
             touch-action: pan-x;
         }
+        div[data-baseweb="slider"] {
+            position: relative;
+            padding-top: 1.2rem;
+        }
+        div[data-baseweb="slider"]::before {
+            content: "低め　　　標準　　　高め";
+            position: absolute;
+            top: -0.05rem;
+            left: 0.15rem;
+            right: 0.15rem;
+            color: rgba(110, 110, 115, 0.46);
+            font-size: 0.74rem;
+            font-weight: 650;
+            pointer-events: none;
+            transition:
+                color 180ms ease,
+                transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+                opacity 180ms ease;
+        }
+        div[data-baseweb="slider"]:focus-within::before,
+        div[data-baseweb="slider"]:active::before {
+            color: rgba(0, 113, 227, 0.72);
+            opacity: 0.96;
+            transform: translateX(5px);
+        }
         div[data-baseweb="slider"] [role="slider"]:active {
-            transform: scale(1.08);
+            transform: scaleX(1.18) scaleY(1.04);
             box-shadow:
                 inset 0 1px 0 rgba(255, 255, 255, 0.95),
                 0 10px 24px rgba(0, 113, 227, 0.22);
@@ -549,6 +1624,21 @@ def _apply_style() -> None:
         .stRadio label {
             color: var(--app-text);
         }
+        section[data-testid="stSidebar"] .company-selection-row {
+            grid-template-columns: 3.7rem minmax(0, 1fr);
+            gap: 0.45rem;
+            padding: 0.5rem 0.56rem;
+            border-color: rgba(210, 210, 215, 0.68);
+        }
+        section[data-testid="stSidebar"] .company-selection-code {
+            font-size: 0.8rem;
+        }
+        section[data-testid="stSidebar"] .company-selection-name {
+            font-size: 0.82rem;
+        }
+        section[data-testid="stSidebar"] .company-selection-meta {
+            font-size: 0.72rem;
+        }
         hr {
             border-color: var(--app-border);
         }
@@ -561,6 +1651,12 @@ def _apply_style() -> None:
             color: var(--app-muted);
             font-size: 0.86rem;
             line-height: 1.5;
+        }
+        .report-note {
+            color: #6e6e73;
+            font-size: 0.95rem;
+            line-height: 1.55;
+            margin: 1rem 0 0;
         }
         .status-ok {
             color: var(--app-green);
@@ -582,6 +1678,19 @@ def _apply_style() -> None:
             100% {
                 transform: translateX(0) scale(1);
                 opacity: 1;
+            }
+        }
+        @keyframes liquid-sheen {
+            0% {
+                transform: translateX(-78%);
+                opacity: 0;
+            }
+            34% {
+                opacity: 0.82;
+            }
+            100% {
+                transform: translateX(78%);
+                opacity: 0;
             }
         }
         @media (prefers-reduced-motion: reduce) {
@@ -626,6 +1735,19 @@ def _apply_style() -> None:
                 font-size: 0.86rem;
             }
         }
+        @media (min-width: 1500px) {
+            .block-container {
+                max-width: 1480px;
+                padding-left: 2.5rem;
+                padding-right: 2.5rem;
+            }
+            .app-title {
+                font-size: 3.25rem;
+            }
+            .auto-shell {
+                padding: 1.55rem;
+            }
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -637,7 +1759,7 @@ def _render_app_header() -> None:
         """
         <div class="app-header">
             <div class="app-kicker">Company Comparison Report Generator</div>
-            <h1 class="app-title">比較レポートを作る。</h1>
+            <h1><a class="app-title" href="/?home=1" target="_self">比較レポートを作る。</a></h1>
             <p class="app-lede">
                 上場企業の選定、課題条件チェック、財務指標の比較、Wordレポート生成まで。
                 質問に答えるだけで、提出用のたたき台まで進めます。
@@ -653,6 +1775,64 @@ def _render_app_header() -> None:
     )
 
 
+def _reset_to_home() -> None:
+    for key in [
+        "wizard_step",
+        "wizard_purpose_choice",
+        "wizard_theme_choice",
+        "wizard_industry_choice",
+        "workflow_mode_pending",
+        "manual_override",
+        "detail_section",
+    ]:
+        if key in st.session_state:
+            del st.session_state[key]
+    st.session_state.workflow_mode = "auto"
+
+
+def _consume_home_query() -> None:
+    if st.query_params.get("home") == "1":
+        _reset_to_home()
+        st.query_params.clear()
+        st.rerun()
+
+
+def _query_param_scalar(name: str) -> str | None:
+    value = st.query_params.get(name)
+    if isinstance(value, list):
+        return str(value[0]) if value else None
+    return str(value) if value is not None else None
+
+
+def _consume_choice_query() -> None:
+    allowed_state_keys = {"wizard_purpose_choice", "wizard_industry_choice"}
+    state_key = _query_param_scalar("choice_state")
+    value = _query_param_scalar("choice_value")
+    if state_key not in allowed_state_keys or not value:
+        return
+    st.session_state[state_key] = value
+    for key in ("choice_state", "choice_value"):
+        try:
+            del st.query_params[key]
+        except KeyError:
+            pass
+    st.rerun()
+
+
+def _consume_detail_section_query() -> None:
+    allowed = {section for section, _label in DETAIL_SECTION_LABELS}
+    section = _query_param_scalar("detail_section")
+    if section not in allowed:
+        return
+    st.session_state.workflow_mode = "detail"
+    st.session_state.detail_section = section
+    try:
+        del st.query_params["detail_section"]
+    except KeyError:
+        pass
+    st.rerun()
+
+
 def _render_section_intro(eyebrow: str, title: str, lede: str) -> None:
     st.markdown(f'<div class="section-eyebrow">{eyebrow}</div>', unsafe_allow_html=True)
     st.subheader(title)
@@ -660,11 +1840,22 @@ def _render_section_intro(eyebrow: str, title: str, lede: str) -> None:
 
 
 def _render_progress(current_step: int) -> None:
-    dots = []
+    progress = (current_step + 1) / len(WIZARD_STEP_LABELS) * 100
+    labels = []
     for index, label in enumerate(WIZARD_STEP_LABELS):
-        state = "is-done" if index < current_step else "is-active" if index == current_step else ""
-        dots.append(f'<div class="wizard-dot {state}" title="{label}"></div>')
-    st.markdown(f'<div class="wizard-progress">{"".join(dots)}</div>', unsafe_allow_html=True)
+        state = "is-active" if index <= current_step else ""
+        labels.append(f'<span class="{state}">{label}</span>')
+    st.markdown(
+        f"""
+        <div class="wizard-progress">
+            <div class="wizard-progress-track" style="--progress: {progress:.1f}%;">
+                <div class="wizard-progress-fill"></div>
+            </div>
+            <div class="wizard-progress-labels">{"".join(labels)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def _set_state_and_rerun(**updates: object) -> None:
@@ -673,16 +1864,670 @@ def _set_state_and_rerun(**updates: object) -> None:
     st.rerun()
 
 
-def _render_choice(title: str, body: str) -> None:
+def _render_choice(title: str, body: str, *, selected: bool = False, href: str | None = None) -> None:
+    selected_class = " is-selected" if selected else ""
+    link_class = " choice-link" if href else ""
+    safe_title = escape(title)
+    safe_body = escape(body)
+    if href:
+        safe_href = escape(href, quote=True)
+        st.markdown(
+            f"""
+            <a class="choice-copy{selected_class}{link_class}" href="{safe_href}" target="_self">
+                <div class="choice-title">{safe_title}</div>
+                <div class="choice-body">{safe_body}</div>
+            </a>
+            """,
+            unsafe_allow_html=True,
+        )
+        return
     st.markdown(
         f"""
-        <div class="choice-copy">
-            <div class="choice-title">{title}</div>
-            <div class="choice-body">{body}</div>
+        <div class="choice-copy{selected_class}">
+            <div class="choice-title">{safe_title}</div>
+            <div class="choice-body">{safe_body}</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+
+
+def _render_selectable_option(
+    *,
+    title: str,
+    body: str,
+    value: str,
+    state_key: str,
+    button_key: str,
+) -> None:
+    selected = st.session_state.get(state_key) == value
+    selected_class = " is-selected" if selected else ""
+    st.markdown(f'<div class="choice-button-wrap{selected_class}"></div>', unsafe_allow_html=True)
+    if st.button(f"{title}\n\n{body}", width="stretch", key=button_key):
+        _set_state_and_rerun(**{state_key: value})
+
+
+def _render_proceed_button(label: str, *, enabled: bool, key: str, **updates: object) -> None:
+    if st.button(label, type="primary" if enabled else "secondary", disabled=not enabled, width="stretch", key=key):
+        _set_state_and_rerun(**updates)
+
+
+def _set_detail_section(section: str) -> None:
+    st.session_state.detail_section = section
+    st.rerun()
+
+
+def _render_detail_section_nav() -> str:
+    allowed = {section for section, _label in DETAIL_SECTION_LABELS}
+    current = str(st.session_state.get("detail_section", "compare"))
+    if current not in allowed:
+        current = "compare"
+        st.session_state.detail_section = current
+
+    labels = dict(DETAIL_SECTION_LABELS)
+    st.markdown('<div class="detail-section-segmented-marker"></div>', unsafe_allow_html=True)
+    selected = st.segmented_control(
+        "表示セクション",
+        options=[section for section, _label in DETAIL_SECTION_LABELS],
+        default=current,
+        required=True,
+        format_func=lambda section: labels.get(str(section), str(section)),
+        key="detail_section",
+        label_visibility="collapsed",
+        width="stretch",
+    )
+    return str(selected or current)
+
+
+def _clear_detail_manual_state(*, clear_selection: bool = False) -> None:
+    for key in list(st.session_state.keys()):
+        if key.startswith("detail_manual_"):
+            del st.session_state[key]
+    if clear_selection:
+        st.session_state.custom_selected_tickers = []
+
+
+def _set_company_select_mode(mode: str) -> None:
+    st.session_state.company_select_mode = mode
+    st.session_state.manual_override = mode == "manual"
+    if mode == "preset":
+        _clear_detail_manual_state(clear_selection=False)
+    st.rerun()
+
+
+def _render_company_mode_buttons(current_mode: str) -> str:
+    col_preset, col_manual = st.columns(2, gap="small")
+    with col_preset:
+        if st.button(
+            "プリセット",
+            type="primary" if current_mode == "preset" else "secondary",
+            width="stretch",
+            key="company_mode_button_preset",
+        ):
+            _set_company_select_mode("preset")
+    with col_manual:
+        if st.button(
+            "手動検索",
+            type="primary" if current_mode == "manual" else "secondary",
+            width="stretch",
+            key="company_mode_button_manual",
+        ):
+            _set_company_select_mode("manual")
+    return str(st.session_state.get("company_select_mode", current_mode))
+
+
+def _set_industry_mode(mode: str) -> None:
+    st.session_state.industry_mode = mode
+    st.rerun()
+
+
+def _render_industry_mode_buttons(current_mode: str, industry_policy: dict) -> str:
+    modes = ["strict_jpx_industry", "business_theme", "broad_sector"]
+    st.markdown('<div class="quiet-caption">業種の見方</div>', unsafe_allow_html=True)
+    for mode in modes:
+        label = _industry_mode_label(mode, industry_policy)
+        if st.button(
+            label,
+            type="primary" if current_mode == mode else "secondary",
+            width="stretch",
+            key=f"industry_mode_button_{mode}",
+        ):
+            _set_industry_mode(mode)
+    return str(st.session_state.get("industry_mode", current_mode))
+
+
+def _set_selected_preset_id(preset_id: str) -> None:
+    st.session_state.selected_preset_id = preset_id
+    st.session_state.selected_preset_id_last = preset_id
+    st.rerun()
+
+
+def _render_preset_buttons(ordered_preset_ids: list[str], presets: dict[str, dict], current_preset_id: str) -> str:
+    current = presets[current_preset_id]
+    current_label = escape(str(current.get("name", current_preset_id)))
+    current_desc = escape(str(current.get("description", "")))
+    st.markdown("**比較セット**")
+    st.markdown(
+        f"""
+        <div class="template-summary">
+            <div class="template-summary-title">{current_label}</div>
+            <p class="template-summary-body">{current_desc}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    for index in range(0, len(ordered_preset_ids), 2):
+        cols = st.columns(2, gap="small")
+        for col, preset_id in zip(cols, ordered_preset_ids[index : index + 2], strict=False):
+            label = PRESET_BUTTON_LABELS.get(preset_id, str(presets[preset_id].get("name", preset_id)))
+            with col:
+                if st.button(
+                    label,
+                    type="primary" if preset_id == current_preset_id else "secondary",
+                    width="stretch",
+                    key=f"preset_button_{preset_id}",
+                ):
+                    _set_selected_preset_id(preset_id)
+    return str(st.session_state.get("selected_preset_id", current_preset_id))
+
+
+def _set_doc_type(value: int) -> None:
+    st.session_state.edinet_doc_type = value
+    st.rerun()
+
+
+def _render_doc_type_buttons() -> int:
+    if "edinet_doc_type" not in st.session_state:
+        st.session_state.edinet_doc_type = 2
+    current = int(st.session_state.edinet_doc_type)
+    st.markdown('<div class="quiet-caption">取得タイプ</div>', unsafe_allow_html=True)
+    col_meta, col_list = st.columns(2, gap="small")
+    with col_meta:
+        if st.button(
+            "書類一覧とメタデータ",
+            type="primary" if current == 2 else "secondary",
+            width="stretch",
+            key="edinet_doc_type_2",
+        ):
+            _set_doc_type(2)
+    with col_list:
+        if st.button(
+            "書類一覧のみ",
+            type="primary" if current == 1 else "secondary",
+            width="stretch",
+            key="edinet_doc_type_1",
+        ):
+            _set_doc_type(1)
+    return int(st.session_state.get("edinet_doc_type", current))
+
+
+def _render_edinet_filter_toggle(
+    *,
+    title: str,
+    body: str,
+    key: str,
+    value: bool,
+    disabled: bool = False,
+) -> bool:
+    with st.container(border=True):
+        st.markdown(
+            f"""
+            <div class="edinet-filter-title">{escape(title)}</div>
+            <div class="edinet-filter-body">{escape(body)}</div>
+            """,
+            unsafe_allow_html=True,
+        )
+        return st.toggle(
+            title,
+            value=value,
+            key=key,
+            disabled=disabled,
+            label_visibility="collapsed",
+            width="stretch",
+        )
+
+
+def _render_edinet_filter_help() -> None:
+    st.markdown(
+        """
+        <div class="edinet-filter-help">
+            <strong>初期設定はレポート生成向けです。</strong>
+            「有報だけ」+「CSVあり」は、自動分析しやすい有価証券報告書を優先します。
+            結果が少ない時は「CSVあり」をOFFにすると、PDF/XBRLのみの書類も探しやすくなります。
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_edinet_lookback_selector(target_date: date) -> int:
+    preset_map = {preset_id: (days, label, body) for preset_id, days, label, body in EDINET_LOOKBACK_PRESETS}
+    preset_ids = [preset_id for preset_id, _days, _label, _body in EDINET_LOOKBACK_PRESETS]
+    if st.session_state.get("edinet_lookback_preset") not in preset_map:
+        st.session_state.edinet_lookback_preset = "standard"
+
+    st.markdown(
+        """
+        <div class="edinet-period-help">
+            <div class="edinet-period-title">検索期間</div>
+            EDINETは1日ごとの書類一覧を確認します。短いほど速く、長いほど提出日がずれた会社を見つけやすくなります。
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown('<div class="edinet-period-marker"></div>', unsafe_allow_html=True)
+    selected = st.segmented_control(
+        "検索期間",
+        options=preset_ids,
+        required=True,
+        format_func=lambda preset_id: f"{preset_map[str(preset_id)][0]}日 {preset_map[str(preset_id)][1]}",
+        key="edinet_lookback_preset",
+        label_visibility="collapsed",
+        width="stretch",
+    )
+    selected_id = str(selected or st.session_state.get("edinet_lookback_preset", "standard"))
+    days, label, body = preset_map.get(selected_id, preset_map["standard"])
+    start_date = target_date - timedelta(days=days - 1)
+    st.markdown(
+        f"""
+        <div class="edinet-period-summary">
+            <div>
+                <strong>{start_date:%Y-%m-%d} 〜 {target_date:%Y-%m-%d}</strong> の書類一覧を確認します。{escape(body)}
+            </div>
+            <div class="edinet-period-badge">最大 {days}日分</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    return int(days)
+
+
+def _render_template_picker(
+    *,
+    available_choices: list[tuple[str, str, str]],
+    presets: dict[str, dict],
+    industry_policy: dict,
+) -> str | None:
+    option_ids = [choice_id for choice_id, _title, _body in available_choices]
+    if st.session_state.get("wizard_theme_choice") not in option_ids:
+        st.session_state.wizard_theme_choice = None
+    current = st.session_state.get("wizard_theme_choice")
+
+    st.markdown('<div class="quiet-caption">題材テンプレート</div>', unsafe_allow_html=True)
+    for index in range(0, len(available_choices), 2):
+        cols = st.columns(2, gap="small")
+        for col, (choice_id, title, body) in zip(cols, available_choices[index : index + 2], strict=False):
+            with col:
+                _render_selectable_option(
+                    title=title,
+                    body=body,
+                    value=choice_id,
+                    state_key="wizard_theme_choice",
+                    button_key=f"wizard_theme_{choice_id}",
+                )
+
+    selected = st.session_state.get("wizard_theme_choice")
+    if not selected:
+        return None
+
+    preset = presets.get(str(selected), {})
+    companies = preset.get("companies", [])
+    mode = str(preset.get("industry_mode", "自由選択")) if preset else "自由選択"
+    mode_label = industry_policy.get("industry_modes", {}).get(mode, {}).get("label", mode)
+    company_text = f"{len(companies)}社" if companies else "手動選択"
+    purpose = APP_MODE_LABELS.get(str(preset.get("default_app_mode", "")), "自由設定") if preset else "自由設定"
+    description = AUTO_THEME_DESCRIPTIONS.get(str(selected), str(preset.get("description", "")))
+    st.markdown(
+        f"""
+        <div class="template-summary">
+            <div class="template-summary-title">{AUTO_THEME_LABELS.get(str(selected), selected)}</div>
+            <p class="template-summary-body">{description}</p>
+            <div class="template-chip-row">
+                <span>{company_text}</span>
+                <span>{mode_label}</span>
+                <span>{purpose}</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    return str(selected)
+
+
+def _filter_company_master(company_master: pd.DataFrame, query: str) -> pd.DataFrame:
+    query = str(query or "").strip()
+    if not query:
+        return company_master.copy()
+    search_columns = [
+        "ticker",
+        "company_name",
+        "edinet_code",
+        "jpx_industry",
+        "broad_sector",
+        "business_theme",
+        "business_summary",
+    ]
+    mask = pd.Series(False, index=company_master.index)
+    for column in search_columns:
+        if column in company_master.columns:
+            mask = mask | company_master[column].astype(str).str.contains(query, case=False, na=False)
+    return company_master[mask].copy()
+
+
+def _company_label_lookup(company_master: pd.DataFrame) -> dict[str, str]:
+    labels = {}
+    for row in company_master.itertuples(index=False):
+        labels[str(row.ticker)] = f"{row.ticker} {row.company_name}"
+    return labels
+
+
+def _parse_ticker_text(text: str) -> list[str]:
+    normalized = str(text or "").replace("　", " ").replace(",", " ").replace("、", " ").replace("\n", " ")
+    tickers = []
+    for token in normalized.split():
+        digits = "".join(char for char in token if char.isdigit())
+        if len(digits) >= 4:
+            tickers.append(digits[:4])
+    return list(dict.fromkeys(tickers))
+
+
+def _company_preview_table(company_master: pd.DataFrame, tickers: list[str]) -> pd.DataFrame:
+    if not tickers:
+        return pd.DataFrame(columns=["証券コード", "企業名", "JPX業種", "テーマ", "EDINETコード"])
+    selected = select_companies(company_master, tickers)
+    columns = ["ticker", "company_name", "jpx_industry", "business_theme", "edinet_code"]
+    return selected[[column for column in columns if column in selected.columns]].rename(
+        columns={
+            "ticker": "証券コード",
+            "company_name": "企業名",
+            "jpx_industry": "JPX業種",
+            "business_theme": "テーマ",
+            "edinet_code": "EDINETコード",
+        }
+    )
+
+
+def _render_company_selection_list(company_master: pd.DataFrame, tickers: list[str]) -> None:
+    preview = _company_preview_table(company_master, tickers)
+    if preview.empty:
+        return
+    rows = []
+    for row in preview.to_dict("records"):
+        code = escape(str(row.get("証券コード", "")))
+        name = escape(str(row.get("企業名", "")))
+        industry = escape(str(row.get("JPX業種", "")))
+        theme = escape(str(row.get("テーマ", "")))
+        edinet_code = escape(str(row.get("EDINETコード", "")))
+        rows.append(
+            f'<div class="company-selection-row">'
+            f'<div class="company-selection-code">{code}</div>'
+            f'<div class="company-selection-name">{name}</div>'
+            f'<div class="company-selection-meta">{industry} / {theme} / EDINET {edinet_code}</div>'
+            f'</div>'
+        )
+    st.markdown(
+        f'<div class="company-selection-list">{"".join(rows)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_company_search_selector(
+    *,
+    company_master: pd.DataFrame,
+    default_tickers: list[str],
+    key_prefix: str,
+    label: str = "比較企業",
+    compact: bool = False,
+) -> list[str]:
+    label_lookup = _company_label_lookup(company_master)
+    valid_tickers = set(company_master["ticker"].astype(str))
+    selected_state_key = f"{key_prefix}_selected_tickers"
+    current_default = [
+        str(ticker)
+        for ticker in st.session_state.get(selected_state_key, default_tickers)
+        if str(ticker) in valid_tickers
+    ]
+
+    if compact:
+        st.caption("現段階の企業検索はサンプル企業マスター内が対象です。未登録の証券コードはEDINETタブの書類検索で確認できます。")
+        direct_text = st.text_input(
+            "証券コードを直接入力",
+            placeholder="例: 3543, 3087",
+            key=f"{key_prefix}_ticker_direct",
+        )
+        query = st.text_input(
+            "企業名・業種で検索",
+            placeholder="例: コメダ、航空、小売業、カフェ",
+            key=f"{key_prefix}_company_query",
+        )
+    else:
+        direct_col, query_col = st.columns([0.95, 1.35])
+        direct_text = direct_col.text_input(
+            "証券コードを直接入力",
+            placeholder="例: 3543, 3087",
+            key=f"{key_prefix}_ticker_direct",
+        )
+        query = query_col.text_input(
+            "企業名・業種で検索",
+            placeholder="例: コメダ、航空、小売業、カフェ",
+            key=f"{key_prefix}_company_query",
+        )
+
+    direct_tickers = [ticker for ticker in _parse_ticker_text(direct_text) if ticker in valid_tickers]
+    selected_pool = list(dict.fromkeys([*current_default, *direct_tickers]))
+    if selected_pool != current_default:
+        st.session_state[selected_state_key] = selected_pool
+    filtered = _filter_company_master(company_master, query).head(25)
+
+    if compact:
+        st.markdown('<div class="company-remove-caption">候補から追加</div>', unsafe_allow_html=True)
+        candidate_tickers = [
+            str(ticker)
+            for ticker in filtered["ticker"].astype(str).tolist()[:8]
+            if str(ticker) not in set(selected_pool)
+        ]
+        if candidate_tickers:
+            for ticker in candidate_tickers:
+                if st.button(f"{label_lookup.get(ticker, ticker)} を追加", width="stretch", key=f"{key_prefix}_candidate_{ticker}"):
+                    selected_pool = list(dict.fromkeys([*selected_pool, ticker]))
+                    st.session_state[selected_state_key] = selected_pool
+                    st.rerun()
+        else:
+            st.caption("追加できる候補はありません。")
+        selected = [str(ticker) for ticker in st.session_state.get(selected_state_key, selected_pool) if str(ticker) in valid_tickers]
+        st.markdown('<div class="company-remove-caption">選択中の企業</div>', unsafe_allow_html=True)
+        _render_company_selection_list(company_master, selected)
+        for ticker in selected:
+            if st.button(f"{label_lookup.get(ticker, ticker)} を外す", width="stretch", key=f"{key_prefix}_remove_{ticker}"):
+                st.session_state[selected_state_key] = [item for item in selected if item != ticker]
+                st.rerun()
+    else:
+        st.markdown("**候補から追加**")
+        candidate_tickers = [
+            str(ticker)
+            for ticker in filtered["ticker"].astype(str).tolist()[:12]
+            if str(ticker) not in set(selected_pool)
+        ]
+        if candidate_tickers:
+            for index in range(0, len(candidate_tickers), 2):
+                cols = st.columns(2, gap="small")
+                for col, ticker in zip(cols, candidate_tickers[index : index + 2], strict=False):
+                    with col:
+                        if st.button(
+                            f"{label_lookup.get(ticker, ticker)} を追加",
+                            width="stretch",
+                            key=f"{key_prefix}_candidate_{ticker}",
+                        ):
+                            selected_pool = list(dict.fromkeys([*selected_pool, ticker]))
+                            st.session_state[selected_state_key] = selected_pool
+                            st.rerun()
+        else:
+            st.caption("追加できる候補はありません。")
+
+        selected = [
+            str(ticker)
+            for ticker in st.session_state.get(selected_state_key, selected_pool)
+            if str(ticker) in valid_tickers
+        ]
+        st.markdown(f"**{label}**")
+        _render_company_selection_list(company_master, selected)
+        for index in range(0, len(selected), 2):
+            cols = st.columns(2, gap="small")
+            for col, ticker in zip(cols, selected[index : index + 2], strict=False):
+                with col:
+                    if st.button(
+                        f"{label_lookup.get(ticker, ticker)} を外す",
+                        width="stretch",
+                        key=f"{key_prefix}_remove_{ticker}",
+                    ):
+                        st.session_state[selected_state_key] = [item for item in selected if item != ticker]
+                        st.rerun()
+
+    if direct_text and not direct_tickers:
+        st.warning("入力された証券コードはサンプル企業マスターに見つかりません。EDINET取得は可能ですが、現行分析には企業マスター登録が必要です。")
+    if filtered.empty:
+        st.info("検索条件に合う企業がありません。検索語を短くしてみてください。")
+    else:
+        st.caption(f"候補: {len(filtered)}社表示 / 選択中: {len(selected)}社")
+    return selected
+
+
+def _make_custom_preset(
+    *,
+    selected_tickers: list[str],
+    company_master: pd.DataFrame,
+    app_mode: str,
+    industry_mode: str,
+) -> dict:
+    companies = select_companies(company_master, selected_tickers)
+    themes = sorted({str(value) for value in companies.get("business_theme", pd.Series(dtype=str)).dropna()})
+    theme_label = " / ".join(themes[:3]) if themes else "自由選択"
+    return {
+        "preset_id": "custom_selection",
+        "name": "自由選択",
+        "description": "証券コード、企業名、業種、事業テーマ検索から選んだ企業を比較します。",
+        "companies": selected_tickers,
+        "industry_mode": industry_mode,
+        "default_app_mode": app_mode,
+        "comparison_theme": theme_label,
+        "expected_warnings": [],
+        "notes": ["検索で選んだカスタム比較です。課題モードでは条件チェック結果を確認してください。"],
+    }
+
+
+def _compute_metrics_for_selection(dataset, selected_tickers: list[str]) -> pd.DataFrame:
+    selected_financials = dataset.financials[dataset.financials["ticker"].isin(selected_tickers)].copy()
+    selected_market = dataset.market_data[dataset.market_data["ticker"].isin(selected_tickers)].copy()
+    selected_manual = dataset.manual_kpis[dataset.manual_kpis["ticker"].isin(selected_tickers)].copy()
+    selected_companies = select_companies(dataset.company_master, selected_tickers).copy()
+    selected_companies["_selection_order"] = range(len(selected_companies))
+    metrics = compute_financial_metrics(selected_financials, selected_market, selected_manual)
+    metrics = metrics.merge(
+        selected_companies[["ticker", "company_name", "_selection_order"]],
+        on="ticker",
+        how="left",
+    )
+    return metrics.sort_values(["_selection_order", "fiscal_year"]).reset_index(drop=True)
+
+
+def _score_preview_table(scores: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "ticker",
+        "company_name",
+        "data_completeness",
+        "growth_score",
+        "profitability_score",
+        "stability_score",
+        "cashflow_score",
+        "analysis_quality_score",
+        "analysis_band",
+    ]
+    existing = [column for column in columns if column in scores.columns]
+    labels = {
+        "ticker": "証券コード",
+        "company_name": "企業名",
+        **SCORE_LABELS,
+    }
+    return scores[existing].rename(columns=labels)
+
+
+def _build_prompt_download(
+    *,
+    selected_tickers: list[str],
+    preset_id: str,
+    preset: dict,
+    app_mode: str,
+    industry_mode: str,
+    dataset,
+) -> tuple[str, str]:
+    edinet_filings = _load_filings_cached(200)
+    edinet_filings = _filter_filings_by_tickers(edinet_filings, selected_tickers).head(20)
+    prompt = build_llm_report_prompt(
+        selected_tickers=selected_tickers,
+        preset={**preset, "preset_id": preset_id},
+        app_mode=app_mode,
+        industry_mode=industry_mode,
+        dataset=dataset,
+        as_of=date.today(),
+        edinet_filings=edinet_filings,
+    )
+    file_name = f"{preset_id}_llm_report_prompt.md"
+    return file_name, prompt
+
+
+def _render_llm_prompt_panel(*, file_name: str, prompt_text: str, key_prefix: str) -> None:
+    st.markdown("**LLM用プロンプト**")
+    st.code(prompt_text, language="markdown", wrap_lines=True, height=420)
+    st.download_button(
+        "Markdownをダウンロード",
+        data=prompt_text.encode("utf-8"),
+        file_name=file_name,
+        mime="text/markdown",
+        width="stretch",
+        key=f"{key_prefix}_download_llm_prompt",
+    )
+
+
+def _render_plus_alpha_preview(
+    metrics: pd.DataFrame,
+    selected_companies: pd.DataFrame,
+    missing_label: str,
+    *,
+    app_mode: str,
+    industry_mode: str,
+    expanded: bool = False,
+) -> None:
+    with st.expander("必須部分と＋αの見方", expanded=expanded):
+        st.caption("必須は課題の最低限、＋αは差の理由や今後の見方まで踏み込む追加分析です。")
+        st.dataframe(build_required_plus_alpha_table(), use_container_width=True, hide_index=True)
+        tab_alpha, tab_dupont, tab_bridge, tab_risk, tab_issue = st.tabs(
+            ["＋α詳細", "ROE要因", "利益ブリッジ", "感応度・リスク", "論点"]
+        )
+        with tab_alpha:
+            plus_alpha = build_plus_alpha_analysis_table(metrics, selected_companies, missing_label=missing_label)
+            st.dataframe(plus_alpha, use_container_width=True, hide_index=True)
+        with tab_dupont:
+            st.dataframe(build_dupont_driver_table(metrics, missing_label), use_container_width=True, hide_index=True)
+        with tab_bridge:
+            st.dataframe(build_profit_bridge_table(metrics, missing_label), use_container_width=True, hide_index=True)
+        with tab_risk:
+            st.dataframe(
+                build_sensitivity_risk_table(metrics, missing_label=missing_label),
+                use_container_width=True,
+                hide_index=True,
+            )
+        with tab_issue:
+            st.dataframe(
+                build_management_issue_table(
+                    metrics,
+                    selected_companies,
+                    app_mode=app_mode,
+                    industry_mode=industry_mode,
+                    missing_label=missing_label,
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
 
 
 def _render_review_line(label: str, value: str) -> None:
@@ -716,6 +2561,7 @@ def _render_auto_mode(
     *,
     preset_id: str,
     preset: dict,
+    presets: dict[str, dict],
     app_mode: str,
     industry_mode: str,
     selected_tickers: list[str],
@@ -766,66 +2612,108 @@ def _render_auto_mode(
     _render_progress(current_step)
 
     if current_step == 0:
-        purpose_choice = st.segmented_control(
-            "用途を選択",
-            options=["assignment", "general"],
-            default=None,
-            format_func=lambda value: "大学課題として作る" if value == "assignment" else "自由に比較する",
-            label_visibility="collapsed",
-            key="wizard_purpose_choice",
-            width="stretch",
-        )
-        if purpose_choice:
-            _set_state_and_rerun(app_mode=purpose_choice, wizard_step=1)
-        _render_choice(
-            "選ぶだけで次へ進みます",
-            "課題モードでは条件チェックを厳しめに、汎用モードでは比較分析の自由度を優先します。",
+        cols = st.columns(2)
+        with cols[0]:
+            _render_selectable_option(
+                title="大学課題として作る",
+                body="上場日、上場後3年以上、同一業種、除外業種を自動チェックします。",
+                value="assignment",
+                state_key="wizard_purpose_choice",
+                button_key="wizard_purpose_assignment",
+            )
+        with cols[1]:
+            _render_selectable_option(
+                title="自由に比較する",
+                body="金融・医療も含め、事業テーマや広義セクターで柔軟に比較します。",
+                value="general",
+                state_key="wizard_purpose_choice",
+                button_key="wizard_purpose_general",
+            )
+        purpose_choice = st.session_state.get("wizard_purpose_choice")
+        st.markdown('<div class="wizard-action-spacer"></div>', unsafe_allow_html=True)
+        _render_proceed_button(
+            "進む",
+            enabled=bool(purpose_choice),
+            key="wizard_purpose_proceed",
+            app_mode=purpose_choice or app_mode,
+            wizard_step=1,
         )
         return
 
     if current_step == 1:
-        first_row = st.columns(2)
-        with first_row[0]:
-            _render_choice("カフェをテーマで比較", "コメダHDとドトール・日レスHD。事業テーマ比較なので課題では警告も確認できます。")
-            if st.button("カフェテーマで進む", type="primary", width="stretch", key="wizard_friend_cafe"):
-                _wizard_preset_choice("friend_cafe_theme", app_mode, "business_theme")
-        with first_row[1]:
-            _render_choice("課題向けカフェ小売", "ドトール・日レスHDとサンマルクHD。JPX業種一致を重視します。")
-            if st.button("小売比較で進む", width="stretch", key="wizard_strict_cafe"):
-                _wizard_preset_choice("strict_cafe_retail", "assignment", "strict_jpx_industry")
-
-        second_row = st.columns(2)
-        with second_row[0]:
-            _render_choice("航空会社を課題向けに比較", "日本航空、スターフライヤー、スカイマーク。再上場注記も扱います。")
-            if st.button("航空課題で進む", width="stretch", key="wizard_airline_assignment"):
-                _wizard_preset_choice("airline_assignment", "assignment", "strict_jpx_industry")
-        with second_row[1]:
-            _render_choice("航空会社を広く比較", "ANA HDも含めた汎用比較。課題条件より業界理解を優先します。")
-            if st.button("航空汎用で進む", width="stretch", key="wizard_airline_general"):
-                _wizard_preset_choice("airline_general", "general", "strict_jpx_industry")
+        available_choices = [
+            choice for choice in AUTO_THEME_CHOICES if choice[0] == "custom_selection" or choice[0] in presets
+        ]
+        theme_choice = _render_template_picker(
+            available_choices=available_choices,
+            presets=presets,
+            industry_policy=industry_policy,
+        )
+        custom_selected = list(st.session_state.get("custom_selected_tickers", []))
+        if theme_choice == "custom_selection":
+            st.markdown('<div class="soft-divider"></div>', unsafe_allow_html=True)
+            custom_selected = _render_company_search_selector(
+                company_master=dataset.company_master,
+                default_tickers=custom_selected or selected_tickers,
+                key_prefix="wizard_custom",
+            )
+            st.session_state.custom_selected_tickers = custom_selected
+            ready = len(custom_selected) >= int(rubric["assignment"]["min_companies"])
+            _render_proceed_button(
+                "選んだ企業で進む",
+                enabled=ready,
+                key="wizard_custom_proceed",
+                manual_override=True,
+                custom_selected_tickers=custom_selected,
+                wizard_step=2,
+            )
+        else:
+            ready = bool(theme_choice and theme_choice in presets)
+            chosen_preset = presets.get(str(theme_choice), {})
+            _render_proceed_button(
+                "この比較で進む",
+                enabled=ready,
+                key="wizard_theme_proceed",
+                selected_preset_id=theme_choice or preset_id,
+                manual_override=False,
+                custom_selected_tickers=list(chosen_preset.get("companies", selected_tickers)),
+                industry_mode=str(chosen_preset.get("industry_mode", industry_mode)),
+                wizard_step=2,
+            )
 
         if st.button("戻る", width="stretch", key="wizard_back_to_purpose"):
             _set_state_and_rerun(wizard_step=0, wizard_purpose_choice=None)
         return
 
     if current_step == 2:
-        industry_choice = st.segmented_control(
-            "業種判定を選択",
-            options=["strict_jpx_industry", "business_theme", "broad_sector"],
-            default=None,
-            format_func=lambda mode: _industry_mode_label(mode, industry_policy),
-            label_visibility="collapsed",
-            key="wizard_industry_choice",
-            width="stretch",
-        )
-        if industry_choice:
-            _set_state_and_rerun(industry_mode=industry_choice, wizard_step=3)
-        _render_choice(
-            "課題ならJPX業種一致が基本",
-            "テーマ比較や広義セクターは便利ですが、大学課題モードでは警告付きで扱います。",
-        )
-        if app_mode == "assignment" and industry_mode != "strict_jpx_industry":
+        cols = st.columns(3)
+        mode_copy = {
+            "strict_jpx_industry": ("JPX業種で厳密に比較", "大学課題の標準。業種一致の説明がしやすい見方です。"),
+            "business_theme": ("事業テーマで比較", "カフェ、航空、外食など実際の事業の近さを優先します。"),
+            "broad_sector": ("広い分類で比較", "食関連、店舗ビジネス、運輸など大きな括りで見ます。"),
+        }
+        for col, mode in zip(cols, ["strict_jpx_industry", "business_theme", "broad_sector"], strict=False):
+            with col:
+                title, body = mode_copy[mode]
+                _render_selectable_option(
+                    title=title,
+                    body=body,
+                    value=mode,
+                    state_key="wizard_industry_choice",
+                    button_key=f"wizard_industry_{mode}",
+                )
+        industry_choice = st.session_state.get("wizard_industry_choice")
+        chosen_mode = str(industry_choice or industry_mode)
+        if app_mode == "assignment" and chosen_mode != "strict_jpx_industry":
             st.warning("課題モードではJPX業種一致が標準です。テーマ比較や広義セクターは警告付きになります。")
+        st.markdown('<div class="wizard-action-spacer"></div>', unsafe_allow_html=True)
+        _render_proceed_button(
+            "進む",
+            enabled=bool(industry_choice),
+            key="wizard_industry_proceed",
+            industry_mode=chosen_mode,
+            wizard_step=3,
+        )
         if st.button("戻る", width="stretch", key="wizard_back_to_theme"):
             _set_state_and_rerun(wizard_step=1)
         return
@@ -842,6 +2730,33 @@ def _render_auto_mode(
             st.warning(warning)
     else:
         st.success("条件チェック上の警告はありません。")
+
+    if len(selected_tickers) >= int(rubric["assignment"]["min_companies"]):
+        metrics_preview = _compute_metrics_for_selection(dataset, selected_tickers)
+        scores = build_company_scores(metrics_preview)
+        st.subheader("分析品質サマリー")
+        st.caption("選択企業内での相対スコアです。投資判断ではなく、比較レポートの読み取り補助として使います。")
+        st.dataframe(_score_preview_table(scores), use_container_width=True, hide_index=True)
+        _render_plus_alpha_preview(
+            metrics_preview,
+            selected_companies,
+            str(rubric["assignment"]["missing_value_label"]),
+            app_mode=app_mode,
+            industry_mode=industry_mode,
+        )
+
+    prompt_file_name = ""
+    prompt_text = ""
+    prompt_ready = len(selected_tickers) >= int(rubric["assignment"]["min_companies"])
+    if prompt_ready:
+        prompt_file_name, prompt_text = _build_prompt_download(
+            selected_tickers=selected_tickers,
+            preset_id=preset_id,
+            preset=preset,
+            app_mode=app_mode,
+            industry_mode=industry_mode,
+            dataset=dataset,
+        )
 
     actions = st.columns([1.2, 1, 1])
     with actions[0]:
@@ -873,6 +2788,12 @@ def _render_auto_mode(
     with actions[2]:
         if st.button("詳細設定を開く", width="stretch", key="wizard_open_detail"):
             _set_state_and_rerun(workflow_mode_pending="detail")
+    if prompt_ready:
+        _render_llm_prompt_panel(
+            file_name=prompt_file_name,
+            prompt_text=prompt_text,
+            key_prefix="wizard",
+        )
 
 
 def _render_workspace_summary(
@@ -940,13 +2861,37 @@ def _latest_metric_preview(metrics: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _filter_filings_by_tickers(filings: pd.DataFrame, tickers: list[str]) -> pd.DataFrame:
+    if filings.empty or not tickers or "sec_code" not in filings.columns:
+        return filings
+    candidates: set[str] = set()
+    for ticker in tickers:
+        candidates.update(sec_code_candidates(ticker))
+    return filings[
+        filings["sec_code"].fillna("").astype(str).str.replace(r"\D", "", regex=True).isin(candidates)
+    ].reset_index(drop=True)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _load_filings_cached(limit: int) -> pd.DataFrame:
+    return load_filings(limit=limit)
+
+
+def _clear_filings_cache() -> None:
+    _load_filings_cached.clear()
+
+
 def _ordered_presets(presets: dict[str, dict]) -> list[tuple[str, dict]]:
     preferred_order = [
         "friend_cafe_theme",
         "strict_cafe_retail",
+        "cafe_three_theme",
         "komeda_franchise_wholesale",
+        "food_retail_general",
         "airline_assignment",
+        "airline_relisting_focus",
         "airline_general",
+        "airline_full_general",
     ]
     items = [(preset_id, presets[preset_id]) for preset_id in preferred_order if preset_id in presets]
     items.extend((preset_id, preset) for preset_id, preset in presets.items() if preset_id not in preferred_order)
@@ -961,7 +2906,7 @@ def _show_condition_warnings(warnings: list[str]) -> None:
         st.success("警告はありません。")
 
 
-def _render_edinet_panel() -> None:
+def _render_edinet_panel(selected_companies: pd.DataFrame | None = None) -> None:
     _render_section_intro(
         "EDINET",
         "書類一覧とCSVを取得",
@@ -973,13 +2918,36 @@ def _render_edinet_panel() -> None:
     col_a.metric("APIキー", "設定済み" if client.has_api_key else "未設定")
     col_b.metric("保存先", "SQLite")
     col_c.metric("取得単位", "1日分")
+    st.info(
+        "現在のレポート計算はサンプルCSVを使います。EDINET連携は、証券コードから書類一覧を検索し、"
+        "CSV ZIPを保存する段階まで対応しています。取得ファイルを財務数値へ正規化する処理は次の拡張対象です。"
+    )
+
+    selected_companies = selected_companies if selected_companies is not None else pd.DataFrame()
+    selected_tickers = (
+        selected_companies["ticker"].dropna().astype(str).tolist()
+        if not selected_companies.empty and "ticker" in selected_companies.columns
+        else []
+    )
+
+    if selected_tickers:
+        st.markdown(
+            f"""
+            <div class="edinet-focus-panel">
+                <div class="template-summary-title">選択中企業からEDINETを探す</div>
+                <p class="template-summary-body">
+                    現在の比較企業の証券コードを使って、直近のEDINET書類一覧を取得し、有価証券報告書とCSV有無で絞り込みます。
+                </p>
+                <div class="template-chip-row">
+                    {"".join(f"<span>{ticker}</span>" for ticker in selected_tickers)}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+    )
 
     target_date = st.date_input("取得日", value=date.today() - timedelta(days=1))
-    doc_type = st.selectbox(
-        "取得タイプ",
-        options=[2, 1],
-        format_func=lambda value: "書類一覧とメタデータ" if value == 2 else "書類一覧のみ",
-    )
+    doc_type = _render_doc_type_buttons()
 
     if not client.has_api_key:
         st.info("`.env` の `EDINET_API_KEY` にAPIキーを保存すると取得できます。")
@@ -990,6 +2958,7 @@ def _render_edinet_panel() -> None:
                 payload = client.fetch_documents(target_date=target_date, doc_type=doc_type)
                 rows = extract_document_rows(payload)
                 saved_count = save_filings(rows)
+                _clear_filings_cache()
             except EdinetApiError as exc:
                 st.error(f"取得できませんでした: {exc}")
                 return
@@ -999,7 +2968,71 @@ def _render_edinet_panel() -> None:
 
         st.success(f"{len(rows)}件を取得し、{saved_count}件を保存しました。")
 
-    filings = load_filings(limit=100)
+    st.divider()
+    _render_section_intro(
+        "Ticker lookup",
+        "証券コードからEDINET書類を探す",
+        "EDINETは日付別の書類一覧APIなので、指定期間を取得して証券コードで絞り込みます。",
+    )
+    ticker_default = " ".join(selected_tickers)
+    ticker_text = st.text_input(
+        "証券コード",
+        value=ticker_default,
+        placeholder="例: 3543 3087 9201",
+        key="edinet_ticker_lookup",
+    )
+    lookup_tickers = _parse_ticker_text(ticker_text)
+    lookback_days = _render_edinet_lookback_selector(target_date)
+    st.markdown("**検索条件**")
+    _render_edinet_filter_help()
+    lookup_filter_cols = st.columns(2, gap="small")
+    with lookup_filter_cols[0]:
+        lookup_annual_only = _render_edinet_filter_toggle(
+            title="有報だけ",
+            body="有価証券報告書に限定して探します。",
+            key="edinet_lookup_annual",
+            value=True,
+        )
+    with lookup_filter_cols[1]:
+        lookup_csv_only = _render_edinet_filter_toggle(
+            title="CSVあり",
+            body="CSV形式で取得できる書類だけに絞ります。",
+            key="edinet_lookup_csv",
+            value=True,
+        )
+
+    if st.button(
+        "証券コードでEDINET検索",
+        type="primary",
+        disabled=not client.has_api_key or not lookup_tickers,
+        width="stretch",
+    ):
+        with st.spinner("EDINET書類一覧を日付ごとに確認しています..."):
+            try:
+                matched_rows = fetch_document_rows_for_tickers(
+                    client,
+                    lookup_tickers,
+                    end_date=target_date,
+                    lookback_days=lookback_days,
+                    doc_type=doc_type,
+                    annual_only=lookup_annual_only,
+                    csv_only=lookup_csv_only,
+                )
+                saved_count = save_filings(matched_rows)
+                _clear_filings_cache()
+            except EdinetApiError as exc:
+                st.error(f"取得できませんでした: {exc}")
+                return
+            except Exception as exc:  # pragma: no cover - Streamlit safety net
+                st.error(f"予期しないエラーです: {exc}")
+                return
+        if matched_rows:
+            st.success(f"{len(matched_rows)}件見つかり、{saved_count}件を保存しました。")
+            st.dataframe(pd.DataFrame(matched_rows).drop(columns=["raw_json"], errors="ignore"), use_container_width=True, hide_index=True)
+        else:
+            st.info("指定期間内に条件へ合う書類は見つかりませんでした。検索期間を広げてください。")
+
+    filings = _load_filings_cached(100)
     st.caption(f"SQLiteキャッシュ: {DEFAULT_DB_PATH}")
     if filings.empty:
         st.info("保存済みのEDINET書類一覧はまだありません。")
@@ -1010,11 +3043,35 @@ def _render_edinet_panel() -> None:
             "保存済み一覧",
             "会社名、EDINETコード、docIDで絞り込み、CSVを取得する書類を選びます。",
         )
-        filter_col_a, filter_col_b, filter_col_c = st.columns([2, 1, 1])
-        query = filter_col_a.text_input("検索", placeholder="会社名、EDINETコード、docID")
-        annual_only = filter_col_b.toggle("有価証券報告書のみ", value=True, width="stretch")
-        csv_only = filter_col_c.toggle("CSVありのみ", value=True, width="stretch")
+        query = st.text_input("検索", placeholder="会社名、EDINETコード、docID")
+        st.markdown("**絞り込み**")
+        _render_edinet_filter_help()
+        filter_col_b, filter_col_c, filter_col_d = st.columns(3, gap="small")
+        with filter_col_b:
+            annual_only = _render_edinet_filter_toggle(
+                title="有報だけ",
+                body="有価証券報告書に限定します。",
+                key="edinet_saved_annual_only",
+                value=True,
+            )
+        with filter_col_c:
+            csv_only = _render_edinet_filter_toggle(
+                title="CSVあり",
+                body="CSV取得に対応した書類だけ表示します。",
+                key="edinet_saved_csv_only",
+                value=True,
+            )
+        with filter_col_d:
+            selected_only = _render_edinet_filter_toggle(
+                title="選択企業",
+                body="現在の比較企業に関連する書類だけ表示します。",
+                key="edinet_saved_selected_only",
+                value=bool(selected_tickers),
+                disabled=not selected_tickers,
+            )
         filtered_filings = filter_filings(filings, query=query, annual_only=annual_only, csv_only=csv_only)
+        if selected_only:
+            filtered_filings = _filter_filings_by_tickers(filtered_filings, selected_tickers)
         st.dataframe(filtered_filings, use_container_width=True, hide_index=True)
 
         if filtered_filings.empty:
@@ -1025,11 +3082,25 @@ def _render_edinet_panel() -> None:
                 str(row.doc_id): f"{row.doc_id} | {row.filer_name} | {row.doc_description}"
                 for row in filtered_filings.itertuples(index=False)
             }
-            selected_doc_id = st.selectbox(
-                "CSVを取得する書類",
-                options=options,
-                format_func=lambda doc_id: label_lookup.get(str(doc_id), str(doc_id)),
-            )
+            selected_doc_id = str(st.session_state.get("edinet_selected_doc_id", ""))
+            if selected_doc_id not in options:
+                selected_doc_id = options[0]
+                st.session_state.edinet_selected_doc_id = selected_doc_id
+            st.markdown("**CSVを取得する書類**")
+            st.markdown(f"選択中: {escape(label_lookup.get(selected_doc_id, selected_doc_id))}")
+            visible_options = options[:10]
+            for doc_id in visible_options:
+                button_type = "primary" if doc_id == selected_doc_id else "secondary"
+                if st.button(
+                    label_lookup.get(doc_id, doc_id),
+                    type=button_type,
+                    width="stretch",
+                    key=f"edinet_select_doc_{doc_id}",
+                ):
+                    st.session_state.edinet_selected_doc_id = doc_id
+                    st.rerun()
+            if len(options) > len(visible_options):
+                st.caption(f"{len(options)}件中{len(visible_options)}件を表示しています。検索欄で絞り込めます。")
             if st.button("この書類のCSVを取得", disabled=not client.has_api_key):
                 with st.spinner("書類CSVを取得しています..."):
                     try:
@@ -1042,11 +3113,13 @@ def _render_edinet_panel() -> None:
                         st.error(f"予期しないエラーです: {exc}")
                         return
                 st.success(f"保存しました: {saved_path}")
+                st.caption("保存したCSV ZIPは今後のXBRL/CSV解析強化で財務データへ自動反映する入口になります。現時点の財務分析はサンプルCSVを使用します。")
 
 
 def main() -> None:
     st.set_page_config(page_title="企業比較レポート", layout="wide", initial_sidebar_state="expanded")
     _apply_style()
+    _consume_home_query()
 
     rubric = load_rubric()
     industry_policy = load_industry_policy()
@@ -1061,6 +3134,12 @@ def main() -> None:
         del st.session_state["workflow_mode_pending"]
     if "wizard_step" not in st.session_state:
         st.session_state.wizard_step = 0
+    if "wizard_purpose_choice" not in st.session_state:
+        st.session_state.wizard_purpose_choice = None
+    if "wizard_theme_choice" not in st.session_state:
+        st.session_state.wizard_theme_choice = None
+    if "wizard_industry_choice" not in st.session_state:
+        st.session_state.wizard_industry_choice = None
     if "selected_preset_id" not in st.session_state or st.session_state.selected_preset_id not in presets:
         st.session_state.selected_preset_id = ordered_preset_ids[0]
     active_preset = presets[st.session_state.selected_preset_id]
@@ -1068,9 +3147,20 @@ def main() -> None:
         st.session_state.app_mode = str(active_preset.get("default_app_mode", "assignment"))
     if "manual_override" not in st.session_state:
         st.session_state.manual_override = False
+    if "company_select_mode" not in st.session_state:
+        st.session_state.company_select_mode = "manual" if bool(st.session_state.manual_override) else "preset"
+    if st.session_state.company_select_mode not in {"preset", "manual"}:
+        st.session_state.company_select_mode = "preset"
+    st.session_state.manual_override = st.session_state.company_select_mode == "manual"
+    if "selected_preset_id_last" not in st.session_state:
+        st.session_state.selected_preset_id_last = st.session_state.selected_preset_id
+    if "custom_selected_tickers" not in st.session_state:
+        st.session_state.custom_selected_tickers = []
     industry_modes = list(industry_policy["industry_modes"].keys())
     if "industry_mode" not in st.session_state or st.session_state.industry_mode not in industry_modes:
         st.session_state.industry_mode = str(active_preset.get("industry_mode", rubric["assignment"]["default_industry_mode"]))
+    _consume_choice_query()
+    _consume_detail_section_query()
 
     _render_app_header()
 
@@ -1087,6 +3177,11 @@ def main() -> None:
     st.markdown("</div>", unsafe_allow_html=True)
     if workflow_mode is None:
         workflow_mode = "auto"
+    workflow_marker = "detail" if workflow_mode == "detail" else "auto"
+    st.markdown(
+        f'<div class="workflow-mode-marker workflow-mode-{workflow_marker}"></div>',
+        unsafe_allow_html=True,
+    )
 
     preset_id = st.session_state.selected_preset_id
     preset = presets[preset_id]
@@ -1098,14 +3193,29 @@ def main() -> None:
     if workflow_mode == "detail":
         with st.sidebar:
             st.header("比較設定")
-            st.caption("プリセットから始めて、必要なら企業や業種判定を切り替えます。")
-            preset_id = st.selectbox(
-                "比較セット",
-                ordered_preset_ids,
-                format_func=lambda value: _preset_label((value, presets[value])),
-                key="selected_preset_id",
-            )
-            preset = presets[preset_id]
+            st.caption("プリセットで始めるか、証券コード・企業名・業種から手動で選びます。")
+            st.markdown("**企業選択**")
+            company_select_mode = str(st.session_state.get("company_select_mode", "preset"))
+            if company_select_mode not in {"preset", "manual"}:
+                company_select_mode = "preset"
+                st.session_state.company_select_mode = "preset"
+            company_select_mode = _render_company_mode_buttons(company_select_mode)
+            if company_select_mode not in {"preset", "manual"}:
+                company_select_mode = "preset"
+                st.session_state.company_select_mode = "preset"
+            manual_override = company_select_mode == "manual"
+            st.session_state.manual_override = manual_override
+            if not manual_override:
+                _clear_detail_manual_state(clear_selection=False)
+
+            if manual_override:
+                st.caption("手動検索では比較セットを使いません。企業を2社以上選ぶと、その組み合わせで分析します。")
+            else:
+                _clear_detail_manual_state(clear_selection=False)
+                preset_id = _render_preset_buttons(ordered_preset_ids, presets, preset_id)
+                if preset_id != st.session_state.get("selected_preset_id_last"):
+                    st.session_state.selected_preset_id_last = preset_id
+                preset = presets[preset_id]
             app_mode = st.segmented_control(
                 "利用目的",
                 options=["assignment", "general"],
@@ -1116,24 +3226,35 @@ def main() -> None:
             )
             if app_mode is None:
                 app_mode = str(preset.get("default_app_mode", "assignment"))
-            industry_mode = st.selectbox(
-                "業種の見方",
-                industry_modes,
-                format_func=lambda mode: _industry_mode_label(mode, industry_policy),
-                key="industry_mode",
-            )
-            manual_override = st.toggle("企業を手動で選ぶ", width="stretch", key="manual_override")
+            industry_mode = str(st.session_state.get("industry_mode", industry_mode))
+            if industry_mode not in industry_modes:
+                industry_mode = str(active_preset.get("industry_mode", rubric["assignment"]["default_industry_mode"]))
+                st.session_state.industry_mode = industry_mode
+            industry_mode = _render_industry_mode_buttons(industry_mode, industry_policy)
+            manual_search_slot = st.empty()
             if manual_override:
-                options = dataset.company_master["ticker"].tolist()
-                name_lookup = dict(zip(dataset.company_master["ticker"], dataset.company_master["company_name"], strict=False))
-                selected_tickers = st.multiselect(
-                    "比較企業",
-                    options,
-                    default=list(preset["companies"]),
-                    format_func=lambda ticker: f"{ticker} {name_lookup.get(ticker, '')}",
-                )
+                with manual_search_slot.container():
+                    selected_tickers = list(st.session_state.get("custom_selected_tickers", []))
+                    selected_tickers = _render_company_search_selector(
+                        company_master=dataset.company_master,
+                        default_tickers=selected_tickers,
+                        key_prefix="detail_manual",
+                        compact=True,
+                    )
+                    st.session_state.custom_selected_tickers = selected_tickers
             else:
+                manual_search_slot.empty()
                 selected_tickers = list(preset["companies"])
+
+    if manual_override:
+        selected_tickers = list(st.session_state.get("custom_selected_tickers", selected_tickers))
+        preset = _make_custom_preset(
+            selected_tickers=selected_tickers,
+            company_master=dataset.company_master,
+            app_mode=app_mode,
+            industry_mode=industry_mode,
+        )
+        preset_id = "custom_selection"
 
     selected_companies = select_companies(dataset.company_master, selected_tickers)
     preview = check_assignment_conditions(
@@ -1150,6 +3271,7 @@ def main() -> None:
         _render_auto_mode(
             preset_id=preset_id,
             preset=preset,
+            presets=presets,
             app_mode=app_mode,
             industry_mode=industry_mode,
             selected_tickers=selected_tickers,
@@ -1171,11 +3293,9 @@ def main() -> None:
         warnings=warning_list,
     )
 
-    tab_compare, tab_checks, tab_report, tab_edinet = st.tabs(
-        ["比較", "条件チェック", "レポート", "EDINET取得"]
-    )
+    detail_section = _render_detail_section_nav()
 
-    with tab_compare:
+    if detail_section == "compare":
         _render_section_intro(
             "Company set",
             "比較する企業",
@@ -1202,7 +3322,7 @@ def main() -> None:
             hide_index=True,
         )
 
-    with tab_checks:
+    elif detail_section == "checks":
         _render_section_intro(
             "Assignment check",
             "課題条件の確認",
@@ -1213,14 +3333,46 @@ def main() -> None:
         st.subheader("企業別の上場条件")
         st.dataframe(preview["company_check_table"], use_container_width=True, hide_index=True)
 
-    with tab_report:
+    elif detail_section == "report":
         _render_section_intro(
             "Report",
             "Wordレポートを生成",
             "表、グラフ、警告、欠損注記、参考資料をまとめた日本語Wordファイルを作成します。",
         )
         disabled = len(selected_tickers) < int(rubric["assignment"]["min_companies"])
-        if st.button("レポートを生成", type="primary", disabled=disabled):
+        if not disabled:
+            report_metrics_preview = _compute_metrics_for_selection(dataset, selected_tickers)
+            _render_plus_alpha_preview(
+                report_metrics_preview,
+                selected_companies,
+                str(rubric["assignment"]["missing_value_label"]),
+                app_mode=app_mode,
+                industry_mode=industry_mode,
+            )
+            prompt_file_name, prompt_text = _build_prompt_download(
+                selected_tickers=selected_tickers,
+                preset_id=preset_id,
+                preset=preset,
+                app_mode=app_mode,
+                industry_mode=industry_mode,
+                dataset=dataset,
+            )
+        else:
+            prompt_file_name = ""
+            prompt_text = ""
+        generate_clicked = st.button("レポートを生成", type="primary", disabled=disabled, width="stretch")
+        st.markdown(
+            '<p class="report-note">Word生成はLLMなしの確定出力です。'
+            'LLM用プロンプトはClaudeなどで文章を磨くための草稿依頼です。</p>',
+            unsafe_allow_html=True,
+        )
+        if not disabled:
+            _render_llm_prompt_panel(
+                file_name=prompt_file_name,
+                prompt_text=prompt_text,
+                key_prefix="detail",
+            )
+        if generate_clicked:
             with st.spinner("レポートを作成しています..."):
                 package = build_report_package(
                     selected_tickers=selected_tickers,
@@ -1247,6 +3399,9 @@ def main() -> None:
             st.subheader("最新年度の主要指標")
             st.dataframe(_latest_metric_preview(package.metrics), use_container_width=True, hide_index=True)
 
+            st.subheader("分析品質サマリー")
+            st.dataframe(_score_preview_table(package.quality_scores), use_container_width=True, hide_index=True)
+
             st.subheader("グラフ")
             columns = st.columns(2)
             for idx, (slug, path) in enumerate(package.chart_paths.items()):
@@ -1258,8 +3413,8 @@ def main() -> None:
                 for note in package.missing_notes:
                     st.write(f"- {note}")
 
-    with tab_edinet:
-        _render_edinet_panel()
+    elif detail_section == "edinet":
+        _render_edinet_panel(selected_companies=selected_companies)
 
 
 if __name__ == "__main__":

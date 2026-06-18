@@ -23,12 +23,12 @@
 ```powershell
 git clone https://github.com/YOUR_NAME/company-comparison-report-generator.git
 cd company-comparison-report-generator
-python -m venv .venv
+py -3.10 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 ```
 
-既存のPython環境を使う場合は、仮想環境作成を省略しても構いません。
+既存のPython環境を使う場合は、仮想環境作成を省略しても構いません。ただし、このPCでは `python` がPython 3.11を指している一方、StreamlitなどはPython 3.10側に入っている場合があります。迷ったらPython 3.10を明示してください。
 
 ## 環境変数
 
@@ -42,12 +42,43 @@ ENV=local
 
 `EDINET_API_KEY` が未設定でも、サンプルCSVとpytestは動作します。
 
+Streamlit Community Cloudなどに公開する場合は、`.env` ではなくデプロイ先のSecretsまたは環境変数に `EDINET_API_KEY` を設定してください。Streamlit Secretsの例は `.streamlit/secrets.example.toml` にあります。
+
+## デプロイ
+
+短期公開はStreamlit Community CloudまたはRenderが最短です。Cloudflareは現時点ではDNS、HTTPS、WAF、Cloudflare Tunnel、将来のフロントエンド配信に使うのが自然です。
+
+詳しい手順は [docs/deployment.md](docs/deployment.md) を参照してください。
+
+Cloudflare側のDNS、SSL/TLS、Tunnel、Access設定を進める場合は [docs/cloudflare_setup.md](docs/cloudflare_setup.md) を参照してください。
+
+コンテナデプロイ向けに `Dockerfile` と `.dockerignore` も用意しています。
+
+## 本格化ロードマップ
+
+EDINET API取得、XBRL/CSV解析、分析アルゴリズム高度化、Webアプリ化の進め方は [docs/production_roadmap.md](docs/production_roadmap.md) に整理しています。
+
+ChatGPT Pro / GPT-5.5 Proへ設計レビューを依頼する場合は、[docs/chatgpt_pro_review_prompt.md](docs/chatgpt_pro_review_prompt.md) のプロンプトを使えます。
+
 ## EDINET書類一覧の取得
 
 APIキーを `.env` に保存したあと、Streamlitの `EDINET取得` タブから1日分の書類一覧を取得できます。
 
 取得の最初の対象は「書類一覧とメタデータ」です。大量のXBRL/CSV/PDFダウンロードはまだ行いません。
-保存済み一覧では、会社名、EDINETコード、docIDで検索できます。まずは「有価証券報告書のみ」「CSVありのみ」で絞り込み、必要な書類を1件ずつ `output/raw_filings/` に保存します。
+保存済み一覧では、会社名、EDINETコード、docID、証券コードで検索できます。まずは「有価証券報告書のみ」「CSVありのみ」で絞り込み、必要な書類を1件ずつ `output/raw_filings/` に保存します。
+
+EDINET APIは証券コードを直接投げる検索APIではなく、日付ごとの書類一覧を取得するAPIです。このアプリでは、入力した証券コードについて直近N日分の書類一覧を取得し、EDINETの `secCode` で絞り込みます。
+
+```text
+証券コード入力
+→ EDINET書類一覧を日付ごとに取得
+→ secCodeで対象企業を抽出
+→ 有価証券報告書 / CSVありで絞り込み
+→ CSV ZIPを保存
+→ 現行アルゴリズムで比較レポート生成
+```
+
+現時点の財務指標計算はサンプルCSVを使います。取得済みEDINET CSV ZIPを財務データへ自動反映する処理は、XBRL/CSV解析強化の拡張対象です。
 
 ローカルで疎通確認したい場合は、キーを表示せずに件数だけ確認できます。
 
@@ -61,7 +92,13 @@ python -c "from datetime import date, timedelta; from src.edinet_client import E
 ## 起動方法
 
 ```powershell
-streamlit run app.py
+.\scripts\run_app.ps1
+```
+
+または、Windowsで `run_app.bat` を実行します。直接コマンドで起動する場合は以下です。
+
+```powershell
+C:\Users\7011y\AppData\Local\Programs\Python\Python310\python.exe -m streamlit run app.py
 ```
 
 ブラウザで `http://localhost:8501` を開きます。

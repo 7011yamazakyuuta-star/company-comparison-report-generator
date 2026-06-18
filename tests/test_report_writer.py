@@ -37,7 +37,16 @@ def test_report_contains_required_sections_and_warning():
     assert package.docx_path.exists()
     assert all(path.exists() for path in package.chart_paths.values())
     text = _document_text(package.docx_path)
-    for heading in ["課題対応表", "＋α分析", "警告", "参考資料", "欠損データ注記"]:
+    for heading in [
+        "課題対応表",
+        "必須部分と＋αの区分",
+        "＋α分析",
+        "高度アルゴリズム分析",
+        "経営分析論点",
+        "警告",
+        "参考資料",
+        "欠損データ注記",
+    ]:
         assert heading in text
     assert "JPX業種" in text
     assert "投資すべき" not in text

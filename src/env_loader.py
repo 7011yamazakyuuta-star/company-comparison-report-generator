@@ -20,3 +20,19 @@ def load_env_file(path: Path = PROJECT_ROOT / ".env") -> None:
         if key and key not in os.environ:
             os.environ[key] = value
 
+
+def get_runtime_secret(key: str, default: str | None = None) -> str | None:
+    """Read a secret from .env, environment variables, or Streamlit secrets."""
+    load_env_file()
+    value = os.environ.get(key)
+    if value:
+        return value
+    try:
+        import streamlit as st
+
+        secret_value = st.secrets.get(key)
+    except Exception:
+        return default
+    if secret_value is None:
+        return default
+    return str(secret_value)

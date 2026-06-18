@@ -1,0 +1,15 @@
+preset_id: food_retail_general
+name: 食関連4社 汎用比較
+description: コメダHD、ドトール・日レスHD、サンマルクHD、神戸物産を食関連・店舗ビジネスとして広く比較する。
+companies:
+  - "3543"
+  - "3087"
+  - "3395"
+  - "3038"
+industry_mode: broad_sector
+default_app_mode: general
+comparison_theme: 食関連・店舗ビジネス
+expected_warnings:
+  - 課題モードではJPX業種または広義セクター利用警告
+notes:
+  - 業態理解を優先する汎用プリセット。大学課題ではstrict_jpx_industryへの切り替えを推奨する。

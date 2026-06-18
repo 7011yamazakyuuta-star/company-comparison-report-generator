@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+.streamlit/secrets.toml
 
 # Python
 __pycache__/
@@ -61,4 +62,3 @@ raw_filings/
 # If future editable Word templates are intentionally versioned, add an
 # exception such as:
 # !templates/*.docx
-

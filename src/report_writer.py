@@ -9,12 +9,25 @@ import pandas as pd
 from docx import Document
 from docx.shared import Inches, Pt
 
+from .advanced_diagnostics import build_advanced_diagnostics
+from .analysis_engine import (
+    build_dupont_driver_table,
+    build_management_issue_table,
+    build_profit_bridge_table,
+    build_sensitivity_risk_table,
+)
 from .assignment_filters import check_assignment_conditions
 from .charts import create_charts
 from .company_master import select_companies
 from .config_loader import PROJECT_ROOT, load_industry_policy, load_rubric
+from .course_framework import (
+    build_plus_alpha_analysis_table,
+    build_plus_alpha_commentary,
+    build_required_plus_alpha_table,
+)
 from .data_loader import Dataset, load_dataset
 from .metrics.financial import KEY_METRICS, METRIC_LABELS, compute_financial_metrics, latest_metrics
+from .metrics.scoring import SCORE_LABELS, build_company_scores, build_scoring_notes
 from .narrative import (
     build_alpha_commentary,
     build_cashflow_commentary,
@@ -61,6 +74,18 @@ NUMBER_COLUMNS = {
     "pbr",
 }
 
+SCORE_COLUMNS = {
+    "data_completeness",
+    "growth_score",
+    "profitability_score",
+    "stability_score",
+    "cashflow_score",
+    "efficiency_score",
+    "trend_resilience_score",
+    "valuation_reference_score",
+    "analysis_quality_score",
+}
+
 
 @dataclass
 class ReportPackage:
@@ -73,6 +98,7 @@ class ReportPackage:
     company_check_table: pd.DataFrame
     assignment_response_table: pd.DataFrame
     metrics: pd.DataFrame
+    quality_scores: pd.DataFrame
 
 
 def _missing_label(rubric: dict[str, Any]) -> str:
@@ -92,6 +118,9 @@ def _format_value(value: object, column: str, missing_label: str) -> str:
         if abs(float(numeric)) >= 100:
             return f"{numeric:,.0f}"
         return f"{numeric:,.2f}"
+    if column in SCORE_COLUMNS:
+        numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+        return missing_label if pd.isna(numeric) else f"{numeric:.1f}"
     return str(value)
 
 
@@ -159,7 +188,26 @@ def _write_report(
     missing_label = _missing_label(rubric)
     assignment_table = build_assignment_response_table(rubric)
     latest = _latest_with_company(metrics)
+    quality_scores = build_company_scores(metrics)
+    advanced = build_advanced_diagnostics(
+        metrics,
+        companies,
+        app_mode=app_mode,
+        industry_mode=industry_mode,
+    )
     alpha_table = build_alpha_commentary(latest, missing_label)
+    framework_table = build_required_plus_alpha_table()
+    plus_alpha_table = build_plus_alpha_analysis_table(metrics, companies, missing_label=missing_label)
+    dupont_table = build_dupont_driver_table(metrics, missing_label)
+    profit_bridge_table = build_profit_bridge_table(metrics, missing_label)
+    sensitivity_table = build_sensitivity_risk_table(metrics, missing_label=missing_label)
+    management_issue_table = build_management_issue_table(
+        metrics,
+        companies,
+        app_mode=app_mode,
+        industry_mode=industry_mode,
+        missing_label=missing_label,
+    )
     missing_notes = collect_missing_notes(metrics, missing_label)
 
     document = Document()
@@ -203,6 +251,8 @@ def _write_report(
     _add_df_table(document, business_descriptions(companies), missing_label)
 
     document.add_heading("講義フレームワーク", level=1)
+    document.add_heading("必須部分と＋αの区分", level=2)
+    _add_df_table(document, framework_table, missing_label)
     document.add_heading("因果のマトリクス", level=2)
     _add_df_table(document, causal_matrix(companies), missing_label)
     document.add_heading("企業分析9視点", level=2)
@@ -254,6 +304,52 @@ def _write_report(
     }
     _add_df_table(document, _display_table(metrics, metric_columns, metric_labels, missing_label), missing_label)
 
+    document.add_heading("高度分析サマリー", level=1)
+    score_columns = [
+        "ticker",
+        "company_name",
+        "fiscal_year",
+        "data_completeness",
+        "growth_score",
+        "profitability_score",
+        "stability_score",
+        "cashflow_score",
+        "efficiency_score",
+        "trend_resilience_score",
+        "valuation_reference_score",
+        "analysis_quality_score",
+        "analysis_band",
+    ]
+    score_labels = {
+        "ticker": "証券コード",
+        "company_name": "企業名",
+        "fiscal_year": "年度",
+        **SCORE_LABELS,
+    }
+    score_columns = [column for column in score_columns if column in quality_scores.columns]
+    _add_df_table(document, _display_table(quality_scores, score_columns, score_labels, missing_label), missing_label)
+    for note in build_scoring_notes(quality_scores, missing_label):
+        _add_paragraph(document, note, rubric)
+
+    document.add_heading("高度判定・考察", level=1)
+    _add_df_table(document, advanced["diagnostic_table"], missing_label)
+    for paragraph in advanced["commentary"]:
+        _add_paragraph(document, str(paragraph), rubric)
+    if advanced["mode_notes"]:
+        document.add_paragraph("モード別確認観点")
+        for note in advanced["mode_notes"]:
+            _add_paragraph(document, f"・{note}", rubric)
+
+    document.add_heading("高度アルゴリズム分析", level=1)
+    document.add_paragraph("ROE要因分解")
+    _add_df_table(document, dupont_table, missing_label)
+    document.add_paragraph("営業利益ブリッジ")
+    _add_df_table(document, profit_bridge_table, missing_label)
+    document.add_paragraph("感応度・リスクフラグ")
+    _add_df_table(document, sensitivity_table, missing_label)
+    document.add_paragraph("経営分析論点")
+    _add_df_table(document, management_issue_table, missing_label)
+
     document.add_heading("グラフ", level=1)
     chart_titles = {
         "revenue_trend": "売上高推移",
@@ -282,7 +378,11 @@ def _write_report(
         _add_paragraph(document, paragraph, rubric)
 
     document.add_heading("＋α分析", level=1)
+    for paragraph in build_plus_alpha_commentary(plus_alpha_table, missing_label):
+        _add_paragraph(document, paragraph, rubric)
     _add_df_table(document, alpha_table, missing_label)
+    document.add_paragraph("講義手法に基づく＋α詳細")
+    _add_df_table(document, plus_alpha_table, missing_label)
 
     document.add_heading("総合比較", level=1)
     _add_paragraph(
@@ -363,6 +463,7 @@ def build_report_package(
         how="left",
     )
     metrics = metrics.sort_values(["_selection_order", "fiscal_year"]).reset_index(drop=True)
+    quality_scores = build_company_scores(metrics)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     preset_id = str(preset.get("preset_id", "custom"))
@@ -394,4 +495,5 @@ def build_report_package(
         company_check_table=assignment_result["company_check_table"],
         assignment_response_table=build_assignment_response_table(rubric),
         metrics=metrics,
+        quality_scores=quality_scores,
     )

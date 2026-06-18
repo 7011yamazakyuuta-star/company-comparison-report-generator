@@ -7,6 +7,7 @@ import requests
 from src.config_loader import PROJECT_ROOT
 from src.edinet_client import EdinetApiError, EdinetClient, extract_document_rows
 from src.edinet_files import save_raw_document
+from src.edinet_lookup import fetch_document_rows_for_tickers, filter_rows_for_tickers, sec_code_candidates
 from src.edinet_repository import filter_filings, load_filings, save_filings
 
 
@@ -186,3 +187,57 @@ def test_filter_filings_and_save_raw_document():
 
     assert saved_path.name == "csv.zip"
     assert saved_path.read_bytes().startswith(b"PK")
+
+
+def test_edinet_lookup_filters_by_ticker_sec_code():
+    rows = [
+        {
+            "doc_id": "S1003543",
+            "sec_code": "35430",
+            "filer_name": "コメダホールディングス",
+            "doc_description": "有価証券報告書",
+            "csv_flag": "1",
+        },
+        {
+            "doc_id": "S1009999",
+            "sec_code": "99990",
+            "filer_name": "対象外",
+            "doc_description": "有価証券報告書",
+            "csv_flag": "1",
+        },
+    ]
+
+    assert sec_code_candidates("3543") == {"3543", "35430"}
+    filtered = filter_rows_for_tickers(rows, ["3543"], annual_only=True, csv_only=True)
+
+    assert [row["doc_id"] for row in filtered] == ["S1003543"]
+
+
+def test_fetch_document_rows_for_tickers_with_fake_client():
+    class FakeClient:
+        def fetch_documents(self, target_date, doc_type):
+            return {
+                "results": [
+                    {
+                        "docID": f"S100{target_date.strftime('%d')}",
+                        "edinetCode": "E32815",
+                        "secCode": "35430",
+                        "filerName": "コメダホールディングス",
+                        "docDescription": "有価証券報告書",
+                        "submitDateTime": f"{target_date.isoformat()} 10:00",
+                        "csvFlag": "1",
+                    }
+                ]
+            }
+
+    rows = fetch_document_rows_for_tickers(
+        FakeClient(),
+        ["3543"],
+        end_date=date(2026, 6, 18),
+        lookback_days=2,
+        csv_only=True,
+    )
+
+    assert len(rows) == 2
+    assert rows[0]["sec_code"] == "35430"
+    assert rows[0]["fetched_date"] == "2026-06-18"

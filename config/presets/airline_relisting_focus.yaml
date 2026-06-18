@@ -1,0 +1,13 @@
+preset_id: airline_relisting_focus
+name: 航空再上場フォーカス
+description: 日本航空、スカイマーク、スターフライヤーを再上場や回復局面の観点で比較する。
+companies:
+  - "9201"
+  - "9204"
+  - "9206"
+industry_mode: strict_jpx_industry
+default_app_mode: assignment
+comparison_theme: 航空・再上場後比較
+expected_warnings: []
+notes:
+  - 日本航空とスカイマークは再上場注記を確認し、燃油費、為替、機材投資、外部環境の影響を分析観点に含める。

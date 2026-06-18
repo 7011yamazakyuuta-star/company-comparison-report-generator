@@ -25,6 +25,10 @@ def load_industry_policy(root: Path = PROJECT_ROOT) -> dict[str, Any]:
     return load_yaml(root / "config" / "industry_policy.yaml")
 
 
+def load_analysis_policy(root: Path = PROJECT_ROOT) -> dict[str, Any]:
+    return load_yaml(root / "config" / "analysis_policy.yaml")
+
+
 def load_presets(root: Path = PROJECT_ROOT) -> dict[str, dict[str, Any]]:
     preset_dir = root / "config" / "presets"
     presets: dict[str, dict[str, Any]] = {}
@@ -33,4 +37,3 @@ def load_presets(root: Path = PROJECT_ROOT) -> dict[str, dict[str, Any]]:
         preset_id = str(preset.get("preset_id") or path.stem)
         presets[preset_id] = preset
     return presets
-

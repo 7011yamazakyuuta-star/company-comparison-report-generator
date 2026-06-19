@@ -74,7 +74,7 @@ from src.edinet_repository import (
 from src.llm_prompt import build_llm_report_prompt
 from src.metrics.financial import compute_financial_metrics
 from src.metrics.scoring import SCORE_LABELS, build_company_scores
-from src.report_writer import build_report_package
+from src.report_writer import REPORT_TYPE_SUBMISSION, build_report_package
 
 
 APP_MODE_LABELS = {
@@ -3306,6 +3306,7 @@ def _render_auto_mode(
                     dataset=report_prepared.dataset,
                     as_of=date.today(),
                     edinet_filings=preflight.filings,
+                    report_type=REPORT_TYPE_SUBMISSION,
                 )
             st.success(f"生成しました: {package.docx_path.name}")
             _render_report_edinet_status(preflight, selected_tickers)
@@ -4236,6 +4237,7 @@ def main() -> None:
                             dataset=report_prepared.dataset,
                             as_of=date.today(),
                             edinet_filings=preflight.filings,
+                            report_type=REPORT_TYPE_SUBMISSION,
                         )
                     st.success(f"生成しました: {package.docx_path.name}")
                     _render_report_edinet_status(preflight, selected_tickers)

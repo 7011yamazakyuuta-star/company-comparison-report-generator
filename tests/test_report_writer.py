@@ -8,7 +8,7 @@ from docx import Document
 from src.config_loader import PROJECT_ROOT
 from src.config_loader import load_presets
 from src.data_loader import Dataset, load_sample_dataset
-from src.report_writer import build_report_package
+from src.report_writer import REPORT_TYPE_DIAGNOSTIC, REPORT_TYPE_SUBMISSION, build_report_package
 
 
 def _document_text(path):
@@ -20,6 +20,32 @@ def _document_text(path):
             for cell in row.cells:
                 table_text.append(cell.text)
     return "\n".join(paragraph_text + table_text)
+
+
+def _heading1_texts(path):
+    document = Document(path)
+    return [paragraph.text for paragraph in document.paragraphs if paragraph.style.name == "Heading 1"]
+
+
+def _header_text(path):
+    document = Document(path)
+    parts = []
+    for section in document.sections:
+        parts.extend(paragraph.text for paragraph in section.header.paragraphs)
+    return "\n".join(parts)
+
+
+def _footer_text(path):
+    document = Document(path)
+    parts = []
+    for section in document.sections:
+        parts.extend(paragraph.text for paragraph in section.footer.paragraphs)
+    return "\n".join(parts)
+
+
+def _footer_xml(path):
+    document = Document(path)
+    return "\n".join(section.footer._element.xml for section in document.sections)
 
 
 def test_report_contains_required_sections_and_warning():
@@ -69,6 +95,76 @@ def test_report_contains_required_sections_and_warning():
     assert "S100TEST" in text
     assert "E32815" in text
     assert "投資すべき" not in text
+
+
+def test_submission_candidate_report_contains_only_final_selected_companies():
+    preset = load_presets()["strict_cafe_retail"]
+    output_dir = PROJECT_ROOT / "work" / "pytest_reports" / uuid4().hex
+    package = build_report_package(
+        selected_tickers=["3087", "3395"],
+        preset={**preset, "preset_id": "strict_cafe_retail"},
+        app_mode="assignment",
+        industry_mode=preset["industry_mode"],
+        dataset=load_sample_dataset(),
+        output_dir=output_dir,
+        as_of=date(2026, 6, 19),
+        edinet_filings=pd.DataFrame(
+            [
+                {
+                    "doc_id": "S100KOMEDA",
+                    "edinet_code": "E32815",
+                    "sec_code": "35430",
+                    "filer_name": "コメダホールディングス",
+                    "doc_description": "有価証券報告書",
+                    "submit_datetime": "2026-06-18 10:00",
+                    "csv_flag": "1",
+                }
+            ]
+        ),
+        report_type=REPORT_TYPE_SUBMISSION,
+    )
+
+    document = Document(package.docx_path)
+    text = _document_text(package.docx_path)
+    headings = _heading1_texts(package.docx_path)
+    footer_xml = _footer_xml(package.docx_path)
+
+    assert "3087" in text
+    assert "3395" in text
+    assert "コメダ" not in text
+    assert "コメダホールディングス" not in text
+    assert "3543" not in text
+    for forbidden in ["生成前チェック", "使用データ表", "ツール", "アプリ", "edinet_candidate", "sample"]:
+        assert forbidden not in text
+    assert len(headings) == 14
+    assert not any(heading.startswith("15.") for heading in headings)
+    assert "14. 参考文献・出典" in headings
+    reference_index = text.index("14. 参考文献・出典")
+    assert "3543" not in text[reference_index:]
+    assert "コメダ" not in text[reference_index:]
+    assert "同業種上場企業における経営状況の比較分析" not in _header_text(package.docx_path)
+    assert _footer_text(package.docx_path).strip() == ""
+    assert "PAGE" in footer_xml
+    assert len(document.tables) >= 5
+    assert len(document.inline_shapes) >= 2
+
+
+def test_diagnostic_report_can_show_pre_generation_checks():
+    preset = load_presets()["strict_cafe_retail"]
+    output_dir = PROJECT_ROOT / "work" / "pytest_reports" / uuid4().hex
+    package = build_report_package(
+        selected_tickers=["3087", "3395"],
+        preset={**preset, "preset_id": "strict_cafe_retail"},
+        app_mode="assignment",
+        industry_mode=preset["industry_mode"],
+        dataset=load_sample_dataset(),
+        output_dir=output_dir,
+        as_of=date(2026, 6, 19),
+        report_type=REPORT_TYPE_DIAGNOSTIC,
+    )
+
+    text = _document_text(package.docx_path)
+    assert "生成前チェック結果・使用データ表" in text
 
 
 def _sparse_manual_dataset() -> Dataset:

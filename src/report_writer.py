@@ -7,6 +7,9 @@ from typing import Any
 
 import pandas as pd
 from docx import Document
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 from docx.shared import Inches, Pt
 
 from .advanced_diagnostics import build_advanced_diagnostics
@@ -102,6 +105,49 @@ SCORE_COLUMNS = {
     "analysis_quality_score",
 }
 
+REPORT_TYPE_DIAGNOSTIC = "diagnostic_report"
+REPORT_TYPE_SUBMISSION = "submission_candidate_report"
+
+SUBMISSION_TITLE = "同業種上場企業における経営状況の比較分析"
+SUBMISSION_CHAPTERS = [
+    "はじめに",
+    "課題条件への適合確認",
+    "分析対象企業の選定理由",
+    "各社の事業内容",
+    "講義フレームワークによる分析視点",
+    "主要財務数値の比較",
+    "グラフによる比較",
+    "収益性分析",
+    "財務安定性分析",
+    "キャッシュフロー分析",
+    "＋α分析",
+    "総合比較",
+    "結論",
+    "参考文献・出典",
+]
+
+SUBMISSION_FORBIDDEN_TERMS = [
+    "当初候補",
+    "代替候補",
+    "候補企業",
+    "候補比較",
+    "生成前チェック",
+    "使用データ表",
+    "ツール",
+    "アプリ",
+    "自動生成",
+    "ChatGPT",
+    "Claude",
+    "AI",
+    "edinet_candidate",
+    "sample",
+    "サンプルデータ",
+    "候補値",
+    "課題対応表",
+    "使用した主要財務数値データ",
+    "使用した財務指標データ",
+]
+
 
 @dataclass
 class ReportPackage:
@@ -189,6 +235,30 @@ def _add_paragraph(document: Document, text: str, rubric: dict[str, Any]) -> Non
     document.add_paragraph(sanitize_advice_terms(text, rubric))
 
 
+def _add_numbered_heading(document: Document, number: int, title: str, *, level: int = 1) -> None:
+    document.add_heading(f"{number}. {title}", level=level)
+
+
+def _add_page_number_footer(document: Document) -> None:
+    for section in document.sections:
+        section.header.paragraphs[0].text = ""
+        footer = section.footer
+        paragraph = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
+        paragraph.clear()
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = paragraph.add_run()
+        fld_char_begin = OxmlElement("w:fldChar")
+        fld_char_begin.set(qn("w:fldCharType"), "begin")
+        instr_text = OxmlElement("w:instrText")
+        instr_text.set(qn("xml:space"), "preserve")
+        instr_text.text = "PAGE"
+        fld_char_end = OxmlElement("w:fldChar")
+        fld_char_end.set(qn("w:fldCharType"), "end")
+        run._r.append(fld_char_begin)
+        run._r.append(instr_text)
+        run._r.append(fld_char_end)
+
+
 def _set_document_style(document: Document) -> None:
     style = document.styles["Normal"]
     style.font.name = "Yu Gothic"
@@ -206,6 +276,77 @@ def _mode_label(app_mode: str) -> str:
 def _latest_with_company(metrics: pd.DataFrame) -> pd.DataFrame:
     latest = latest_metrics(metrics)
     return latest.sort_values(["_selection_order", "ticker"]).reset_index(drop=True)
+
+
+def _document_plain_text(document: Document) -> str:
+    parts: list[str] = []
+    parts.extend(paragraph.text for paragraph in document.paragraphs)
+    for table in document.tables:
+        for row in table.rows:
+            parts.extend(cell.text for cell in row.cells)
+    for section in document.sections:
+        parts.extend(paragraph.text for paragraph in section.header.paragraphs)
+        parts.extend(paragraph.text for paragraph in section.footer.paragraphs)
+    return "\n".join(parts)
+
+
+def _selected_company_tokens(companies: pd.DataFrame) -> set[str]:
+    tokens: set[str] = set()
+    for _, row in companies.iterrows():
+        tokens.add(str(row.get("ticker", "")).strip())
+        tokens.add(str(row.get("company_name", "")).strip())
+    return {token for token in tokens if token}
+
+
+def _foreign_company_tokens(master: pd.DataFrame, companies: pd.DataFrame) -> set[str]:
+    selected_tickers = set(companies["ticker"].astype(str))
+    foreign = master[~master["ticker"].astype(str).isin(selected_tickers)] if "ticker" in master.columns else pd.DataFrame()
+    tokens: set[str] = set()
+    if foreign.empty:
+        return tokens
+    for _, row in foreign.iterrows():
+        ticker = str(row.get("ticker", "")).strip()
+        name = str(row.get("company_name", "")).strip()
+        if ticker:
+            tokens.add(ticker)
+        if len(name) >= 3:
+            tokens.add(name)
+    return tokens
+
+
+def _validate_submission_document(
+    document: Document,
+    *,
+    companies: pd.DataFrame,
+    company_master: pd.DataFrame,
+) -> None:
+    text = _document_plain_text(document)
+    forbidden_hits = [term for term in SUBMISSION_FORBIDDEN_TERMS if term in text]
+    if forbidden_hits:
+        raise ValueError(f"submission_candidate_report contains forbidden terms: {', '.join(forbidden_hits)}")
+    foreign_hits = sorted(token for token in _foreign_company_tokens(company_master, companies) if token and token in text)
+    if foreign_hits:
+        raise ValueError(f"submission_candidate_report contains non-selected company tokens: {', '.join(foreign_hits[:12])}")
+
+
+def _condition_submission_table(assignment_result: dict[str, object]) -> pd.DataFrame:
+    table = assignment_result["condition_table"].copy()
+    if table.empty:
+        return table
+    table = table.rename(columns={"条件": "確認項目", "判定": "結果", "詳細": "確認内容"})
+    return table
+
+
+def _company_condition_submission_table(company_check_table: pd.DataFrame, companies: pd.DataFrame) -> pd.DataFrame:
+    selected = set(companies["ticker"].astype(str))
+    table = company_check_table.copy()
+    if "証券コード" in table.columns:
+        table = table[table["証券コード"].astype(str).isin(selected)]
+    return table.reset_index(drop=True)
+
+
+def _top_level_heading_count(document: Document) -> int:
+    return sum(1 for paragraph in document.paragraphs if paragraph.style.name == "Heading 1")
 
 
 def _missing_data_table(metrics: pd.DataFrame, missing_label: str) -> pd.DataFrame:
@@ -379,6 +520,198 @@ def _outlier_notes(metrics: pd.DataFrame) -> list[str]:
     return notes
 
 
+def _write_submission_candidate_report(
+    docx_path: Path,
+    preset: dict[str, Any],
+    industry_mode: str,
+    companies: pd.DataFrame,
+    company_master: pd.DataFrame,
+    metrics: pd.DataFrame,
+    chart_paths: dict[str, Path],
+    assignment_result: dict[str, object],
+    rubric: dict[str, Any],
+    as_of: date,
+) -> None:
+    missing_label = _missing_label(rubric)
+    latest = _latest_with_company(metrics)
+    framework_table = build_required_plus_alpha_table()
+    plus_alpha_table = build_plus_alpha_analysis_table(metrics, companies, missing_label=missing_label)
+    plus_alpha_status_table = build_plus_alpha_status_table(metrics, missing_label=missing_label)
+    alpha_table = build_alpha_commentary(latest, missing_label)
+
+    document = Document()
+    _set_document_style(document)
+    _add_page_number_footer(document)
+
+    company_list = "、".join(f"{row.ticker} {row.company_name}" for row in companies.itertuples(index=False))
+    document.add_heading(SUBMISSION_TITLE, level=0)
+    document.add_paragraph(f"分析対象企業: {company_list}")
+    document.add_paragraph(f"作成日: {as_of.isoformat()}")
+    document.add_page_break()
+
+    _add_numbered_heading(document, 1, "はじめに")
+    _add_paragraph(
+        document,
+        "本レポートは、同業種に属する日本の上場企業を対象として、経営状況を財務指標と事業内容の両面から比較するものである。"
+        "分析では、収益性、財務安定性、キャッシュフロー、講義で扱った分析視点を用い、対象企業間の特徴を整理する。",
+        rubric,
+    )
+
+    _add_numbered_heading(document, 2, "課題条件への適合確認")
+    document.add_heading("2.1 課題条件の確認方法", level=2)
+    _add_paragraph(
+        document,
+        "本課題では、2000年度以降に上場し、上場後3年以上が経過した同じ業種の企業を2社以上選定する必要がある。"
+        "本レポートでは、同じ業種であることを客観的に確認するため、JPX業種分類を用いる。"
+        "なお、課題文にJPX業種分類と明記されているわけではないが、上場企業の業種分類として確認しやすく、"
+        "提出上の客観性を高めるためである。",
+        rubric,
+    )
+    document.add_heading("2.2 対象企業の課題条件適合表", level=2)
+    _add_df_table(document, _condition_submission_table(assignment_result), missing_label)
+    _add_df_table(document, _company_condition_submission_table(assignment_result["company_check_table"], companies), missing_label)
+
+    _add_numbered_heading(document, 3, "分析対象企業の選定理由")
+    industry_values = "、".join(companies["jpx_industry"].dropna().astype(str).unique())
+    theme = str(preset.get("comparison_theme") or "同業種比較")
+    _add_paragraph(
+        document,
+        f"本レポートでは、{company_list}を比較対象とする。"
+        f"両社はJPX業種分類において{industry_values}に属しており、{theme}の観点から比較可能である。"
+        "同じ業種に属する企業を比較することで、事業環境の共通性を保ちながら、収益構造や財務安定性の違いを確認できる。",
+        rubric,
+    )
+
+    _add_numbered_heading(document, 4, "各社の事業内容")
+    _add_df_table(document, business_descriptions(companies), missing_label)
+
+    _add_numbered_heading(document, 5, "講義フレームワークによる分析視点")
+    _add_paragraph(
+        document,
+        "企業比較では、財務数値を単に並べるだけでなく、財務指標の背後にある事業要因を確認する必要がある。"
+        "本章では、必須部分と＋α分析、因果のマトリクス、企業分析9視点により、比較の観点を整理する。",
+        rubric,
+    )
+    submission_framework_table = framework_table.rename(columns={"ツールでの扱い": "レポートでの扱い"}).replace(
+        {"課題対応表、条件適合表、警告": "課題条件の確認方法、対象企業の課題条件適合表"}
+    )
+    _add_df_table(document, submission_framework_table, missing_label)
+    _add_df_table(document, causal_matrix(companies), missing_label)
+    _add_df_table(document, nine_perspectives(companies), missing_label)
+
+    _add_numbered_heading(document, 6, "主要財務数値の比較")
+    financial_columns = [
+        "ticker",
+        "company_name",
+        "fiscal_year",
+        "revenue",
+        "operating_income",
+        "net_income",
+        "total_assets",
+        "equity",
+        "cash_flow_operating",
+        "fcf",
+    ]
+    financial_labels = {
+        "ticker": "証券コード",
+        "company_name": "企業名",
+        "fiscal_year": "年度",
+        "revenue": "売上高",
+        "operating_income": "営業利益",
+        "net_income": "当期利益",
+        "total_assets": "総資産",
+        "equity": "自己資本",
+        "cash_flow_operating": "営業CF",
+        "fcf": "FCF",
+    }
+    _add_df_table(document, _display_table(metrics, financial_columns, financial_labels, missing_label), missing_label)
+    metric_columns = [
+        "ticker",
+        "company_name",
+        "fiscal_year",
+        *KEY_METRICS,
+        "roa_decomposed",
+        "roe_decomposed",
+    ]
+    metric_labels = {
+        "ticker": "証券コード",
+        "company_name": "企業名",
+        "fiscal_year": "年度",
+        **METRIC_LABELS,
+        "roa_decomposed": "ROA分解",
+        "roe_decomposed": "ROE分解",
+    }
+    _add_df_table(document, _display_table(metrics, metric_columns, metric_labels, missing_label), missing_label)
+
+    _add_numbered_heading(document, 7, "グラフによる比較")
+    chart_titles = {
+        "revenue_trend": "売上高推移",
+        "operating_margin_trend": "営業利益率推移",
+        "roa_roe_trend": "ROA・ROE推移",
+        "equity_ratio_trend": "自己資本比率推移",
+        "cashflow_fcf_trend": "営業CF・FCF推移",
+    }
+    for slug, title in chart_titles.items():
+        path = chart_paths.get(slug)
+        if path and path.exists():
+            document.add_paragraph(title)
+            document.add_picture(str(path), width=Inches(6.3))
+
+    _add_numbered_heading(document, 8, "収益性分析")
+    for paragraph in build_profitability_commentary(latest, missing_label):
+        _add_paragraph(document, paragraph, rubric)
+
+    _add_numbered_heading(document, 9, "財務安定性分析")
+    for paragraph in build_stability_commentary(latest, missing_label):
+        _add_paragraph(document, paragraph, rubric)
+
+    _add_numbered_heading(document, 10, "キャッシュフロー分析")
+    for paragraph in build_cashflow_commentary(latest, missing_label):
+        _add_paragraph(document, paragraph, rubric)
+
+    _add_numbered_heading(document, 11, "＋α分析")
+    _add_df_table(document, plus_alpha_status_table, missing_label)
+    _add_df_table(document, alpha_table, missing_label)
+    _add_df_table(document, plus_alpha_table, missing_label)
+    for paragraph in build_plus_alpha_commentary(plus_alpha_table, missing_label):
+        _add_paragraph(document, paragraph, rubric)
+
+    _add_numbered_heading(document, 12, "総合比較")
+    _add_paragraph(
+        document,
+        "総合的には、各社の経営状況は売上規模、利益率、資産効率、財務安定性、キャッシュ創出力の組み合わせで把握できる。"
+        "同じ業種に属していても、事業展開、資産の使い方、費用構造の違いにより、財務指標には差が生じる。"
+        "したがって、単一指標だけで評価するのではなく、複数の指標を組み合わせて経営状況を確認する必要がある。",
+        rubric,
+    )
+
+    _add_numbered_heading(document, 13, "結論")
+    _add_paragraph(
+        document,
+        "本レポートでは、同一のJPX業種分類に属する上場企業を対象に、課題条件への適合、事業内容、主要財務数値、"
+        "収益性、財務安定性、キャッシュフロー、＋α分析を用いて比較した。"
+        "比較の結果、対象企業の経営状況は財務指標だけでなく、事業構造や費用構造と合わせて理解する必要があることが確認できる。",
+        rubric,
+    )
+
+    _add_numbered_heading(document, 14, "参考文献・出典")
+    for _, row in companies.iterrows():
+        _add_paragraph(
+            document,
+            f"・{row['ticker']} {row['company_name']} 有価証券報告書（EDINET）",
+            rubric,
+        )
+    _add_paragraph(document, "・日本取引所グループ 業種分類", rubric)
+    _add_paragraph(document, "・金融庁 EDINET", rubric)
+    _add_paragraph(document, "・講義資料", rubric)
+
+    if _top_level_heading_count(document) != len(SUBMISSION_CHAPTERS):
+        raise ValueError("submission_candidate_report must contain exactly 14 top-level chapters")
+    _validate_submission_document(document, companies=companies, company_master=company_master)
+    docx_path.parent.mkdir(parents=True, exist_ok=True)
+    document.save(docx_path)
+
+
 def _write_report(
     docx_path: Path,
     preset: dict[str, Any],
@@ -466,6 +799,9 @@ def _write_report(
         document.add_paragraph("注記")
         for note in notes:
             _add_paragraph(document, f"・{note}", rubric)
+
+    document.add_heading("生成前チェック結果・使用データ表", level=1)
+    _add_df_table(document, completion_table, missing_label)
 
     document.add_heading("企業選定理由", level=1)
     _add_paragraph(
@@ -710,7 +1046,10 @@ def build_report_package(
     output_dir: Path = PROJECT_ROOT / "output",
     as_of: date | None = None,
     edinet_filings: pd.DataFrame | None = None,
+    report_type: str = REPORT_TYPE_DIAGNOSTIC,
 ) -> ReportPackage:
+    if report_type not in {REPORT_TYPE_DIAGNOSTIC, REPORT_TYPE_SUBMISSION}:
+        raise ValueError(f"unknown report_type: {report_type}")
     rubric = load_rubric()
     industry_policy = load_industry_policy()
     dataset = dataset or load_dataset(use_sqlite=True)
@@ -744,21 +1083,35 @@ def build_report_package(
     preset_id = str(preset.get("preset_id", "custom"))
     chart_dir = output_dir / "charts" / f"{preset_id}_{timestamp}"
     chart_paths = create_charts(metrics, selected_companies, chart_dir)
-    docx_path = output_dir / "reports" / f"{preset_id}_{timestamp}.docx"
+    docx_path = output_dir / "reports" / f"{preset_id}_{report_type}_{timestamp}.docx"
 
-    _write_report(
-        docx_path=docx_path,
-        preset=preset,
-        app_mode=app_mode,
-        industry_mode=industry_mode,
-        companies=selected_companies,
-        metrics=metrics,
-        chart_paths=chart_paths,
-        assignment_result=assignment_result,
-        rubric=rubric,
-        as_of=as_of,
-        edinet_filings=edinet_filings,
-    )
+    if report_type == REPORT_TYPE_SUBMISSION:
+        _write_submission_candidate_report(
+            docx_path=docx_path,
+            preset=preset,
+            industry_mode=industry_mode,
+            companies=selected_companies,
+            company_master=dataset.company_master,
+            metrics=metrics,
+            chart_paths=chart_paths,
+            assignment_result=assignment_result,
+            rubric=rubric,
+            as_of=as_of,
+        )
+    else:
+        _write_report(
+            docx_path=docx_path,
+            preset=preset,
+            app_mode=app_mode,
+            industry_mode=industry_mode,
+            companies=selected_companies,
+            metrics=metrics,
+            chart_paths=chart_paths,
+            assignment_result=assignment_result,
+            rubric=rubric,
+            as_of=as_of,
+            edinet_filings=edinet_filings,
+        )
 
     missing_notes = collect_missing_notes(metrics, _missing_label(rubric))
     missing_notes.extend(_outlier_notes(metrics))
